@@ -9,6 +9,7 @@ business-logic filtering (confidence threshold, GENERAL discard).
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 
 from openai import AsyncOpenAI
 
@@ -16,6 +17,21 @@ from src.core.config import get_settings
 from src.email_pipeline.schemas import ApplicationEvent, EmailEventType
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _get_client() -> AsyncOpenAI:
+    """Return a cached client pointed at the configured LLM endpoint.
+
+    Cached because constructing a client per email would open a fresh
+    connection pool for every inbound webhook.
+    """
+    settings = get_settings()
+    return AsyncOpenAI(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+    )
+
 
 _SYSTEM_PROMPT = """\
 You are an expert assistant that analyses emails and determines whether they \
@@ -66,8 +82,7 @@ async def extract_application_event(
     -------
     ApplicationEvent | None
     """
-    settings = get_settings()
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    client = _get_client()
 
     user_message = (
         f"From: {sender}\n"
@@ -77,7 +92,7 @@ async def extract_application_event(
 
     try:
         completion = await client.beta.chat.completions.parse(
-            model=settings.OPENAI_MODEL,
+            model=get_settings().llm_model,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},

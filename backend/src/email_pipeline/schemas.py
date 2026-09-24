@@ -11,6 +11,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from src.core.state_machine import ApplicationStatus
+
 
 class EmailEventType(str, Enum):
     """Categories of job-application-related email events."""
@@ -21,6 +23,23 @@ class EmailEventType(str, Enum):
     OA_INVITATION = "OA_INVITATION"
     OFFER = "OFFER"
     GENERAL = "GENERAL"
+
+
+# The bridge between what the model detects in an email and the application
+# lifecycle. GENERAL maps to nothing: such emails are discarded before this
+# point, and an unmapped event must never move an application.
+EVENT_TYPE_TO_STATUS: dict[EmailEventType, ApplicationStatus] = {
+    EmailEventType.APPLICATION_CONFIRMATION: ApplicationStatus.APPLIED,
+    EmailEventType.REJECTION: ApplicationStatus.REJECTED,
+    EmailEventType.INTERVIEW_INVITATION: ApplicationStatus.INTERVIEW_SCHEDULED,
+    EmailEventType.OA_INVITATION: ApplicationStatus.OA_RECEIVED,
+    EmailEventType.OFFER: ApplicationStatus.OFFERED,
+}
+
+
+def status_for_event(event_type: EmailEventType) -> ApplicationStatus | None:
+    """Return the application status implied by *event_type*, if any."""
+    return EVENT_TYPE_TO_STATUS.get(event_type)
 
 
 class ApplicationEvent(BaseModel):

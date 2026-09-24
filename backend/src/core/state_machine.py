@@ -8,6 +8,7 @@ states safely – it raises ``ValueError`` for illegal moves.
 
 from __future__ import annotations
 
+from collections import deque
 from enum import StrEnum
 
 
@@ -117,3 +118,44 @@ def transition(
             f"Allowed targets from {from_status.value}: {', '.join(allowed_names)}"
         )
     return to_status
+
+
+def find_transition_path(
+    from_status: ApplicationStatus,
+    to_status: ApplicationStatus,
+) -> list[ApplicationStatus] | None:
+    """Return the shortest legal path from *from_status* to *to_status*.
+
+    Real inboxes skip steps. An offer email frequently arrives while an
+    application still sits at INTERVIEW_SCHEDULED, because no email ever says
+    "you have now been interviewed". A direct check rejects that move and the
+    offer would be silently dropped, so callers acting on inferred evidence
+    can ask whether the destination is reachable at all.
+
+    Returns the intermediate statuses plus the destination, excluding
+    *from_status*, or ``None`` when no legal path exists. A path of length one
+    is an ordinary direct transition.
+
+    Deliberately breadth-first: the shortest chain makes the fewest
+    assumptions about steps nobody observed.
+    """
+    if from_status == to_status:
+        return []
+
+    queue: deque[tuple[ApplicationStatus, list[ApplicationStatus]]] = deque(
+        [(from_status, [])]
+    )
+    seen = {from_status}
+
+    while queue:
+        current, path = queue.popleft()
+        for nxt in VALID_TRANSITIONS.get(current, frozenset()):
+            if nxt in seen:
+                continue
+            next_path = [*path, nxt]
+            if nxt is to_status:
+                return next_path
+            seen.add(nxt)
+            queue.append((nxt, next_path))
+
+    return None

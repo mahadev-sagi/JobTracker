@@ -61,6 +61,10 @@ services:
     volumes:
       - ./backend:/app
       - /app/__pycache__
+      # Gmail token.json, produced by backend/scripts/bootstrap_gmail_token.py.
+      # Read-only: the app refreshes the token in memory and only tries to
+      # write it back opportunistically.
+      - ./backend/secrets:/app/secrets:ro
     networks:
       - jobtracker-net
 

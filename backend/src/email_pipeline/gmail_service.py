@@ -8,8 +8,10 @@ push notifications via Google Cloud Pub/Sub.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+import os
 import re
 from email.utils import parseaddr
 from html import unescape
@@ -17,10 +19,15 @@ from typing import Any
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+from src.core.config import get_settings
+
 logger = logging.getLogger(__name__)
+
+
+class GmailAuthError(RuntimeError):
+    """Raised when Gmail credentials are missing, invalid or unrefreshable."""
 
 _SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
@@ -50,17 +57,23 @@ class GmailService:
     default thread-pool via ``asyncio.to_thread``.
     """
 
-    def __init__(self, credentials_path: str) -> None:
+    def __init__(self, credentials_path: str | None = None) -> None:
         """
         Build and authenticate the Gmail API client.
 
         Parameters
         ----------
         credentials_path:
-            Path to the Google OAuth ``credentials.json`` (or a previously
-            saved ``token.json``).
+            Path to a previously authorised ``token.json``. Defaults to
+            ``settings.GOOGLE_CREDENTIALS_JSON``.
         """
-        self._credentials_path = credentials_path
+        settings = get_settings()
+        self._credentials_path = credentials_path or settings.GOOGLE_CREDENTIALS_JSON
+        if not self._credentials_path:
+            raise GmailAuthError(
+                "No Gmail credentials configured. Set GOOGLE_CREDENTIALS_JSON "
+                "to the path of an authorised token.json."
+            )
         self._creds: Credentials | None = None
         self._service: Any = None
         self._authenticate()
@@ -68,27 +81,51 @@ class GmailService:
     # ── Private helpers ──────────────────────────────────────────────
 
     def _authenticate(self) -> None:
-        """Load or refresh credentials, prompting the user if needed."""
-        import os
+        """Load and refresh stored OAuth credentials.
 
-        token_path = os.path.join(
-            os.path.dirname(self._credentials_path), "token.json"
-        )
+        Deliberately never starts an interactive consent flow. The server runs
+        headless in Docker and Lambda, where ``run_local_server`` would block
+        forever on a browser that cannot open. Minting the token is a one-time
+        operation performed out of band by
+        ``backend/scripts/bootstrap_gmail_token.py``.
+        """
+        token_path = self._credentials_path
 
-        if os.path.exists(token_path):
+        if not os.path.exists(token_path):
+            raise GmailAuthError(
+                f"Gmail token not found at '{token_path}'. Run "
+                "`python backend/scripts/bootstrap_gmail_token.py` once on a "
+                "machine with a browser, then mount the resulting token.json."
+            )
+
+        try:
             self._creds = Credentials.from_authorized_user_file(token_path, _SCOPES)
+        except ValueError as exc:
+            raise GmailAuthError(
+                f"'{token_path}' is not a valid authorised-user token file. "
+                "It should be the token.json produced by the bootstrap "
+                "script, not the OAuth client credentials.json."
+            ) from exc
 
-        if not self._creds or not self._creds.valid:
-            if self._creds and self._creds.expired and self._creds.refresh_token:
+        if not self._creds.valid:
+            if self._creds.expired and self._creds.refresh_token:
+                logger.info("Gmail credentials expired — refreshing.")
                 self._creds.refresh(Request())
+                # Persist the rotated access token so a restart does not need
+                # to refresh again. Best-effort: the path may be mounted
+                # read-only, which is not fatal.
+                try:
+                    with open(token_path, "w") as f:
+                        f.write(self._creds.to_json())
+                except OSError:
+                    logger.warning(
+                        "Could not write refreshed token back to %s", token_path
+                    )
             else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    self._credentials_path, _SCOPES
+                raise GmailAuthError(
+                    "Stored Gmail credentials are invalid and cannot be "
+                    "refreshed (no refresh_token). Re-run the bootstrap script."
                 )
-                self._creds = flow.run_local_server(port=0)
-
-            with open(token_path, "w") as f:
-                f.write(self._creds.to_json())
 
         self._service = build("gmail", "v1", credentials=self._creds)
 
@@ -106,7 +143,6 @@ class GmailService:
         Returns an empty list when no new history is available (e.g.
         when ``historyId`` is already up-to-date).
         """
-        import asyncio
 
         def _fetch() -> list[dict]:
             results: list[dict] = []
@@ -141,7 +177,6 @@ class GmailService:
         tuple[str, str, str]
             ``(subject, body, sender)``
         """
-        import asyncio
 
         def _fetch() -> tuple[str, str, str]:
             msg = (
@@ -180,7 +215,6 @@ class GmailService:
         dict
             The watch response containing ``historyId`` and ``expiration``.
         """
-        import asyncio
 
         def _watch() -> dict:
             body = {
@@ -241,3 +275,29 @@ class GmailService:
         if html:
             return _strip_html(html)
         return ""
+
+
+# ---------------------------------------------------------------------------
+# Module-level accessor
+# ---------------------------------------------------------------------------
+
+_service_singleton: GmailService | None = None
+
+
+def get_gmail_service() -> GmailService:
+    """Return a lazily built, process-wide ``GmailService``.
+
+    Authentication reads a token from disk and builds an HTTP client, so
+    constructing one per inbound webhook would be wasteful. The instance
+    refreshes its own credentials as they expire.
+    """
+    global _service_singleton  # noqa: PLW0603
+    if _service_singleton is None:
+        _service_singleton = GmailService()
+    return _service_singleton
+
+
+def reset_gmail_service() -> None:
+    """Drop the cached instance. Used by tests and after a token rotation."""
+    global _service_singleton  # noqa: PLW0603
+    _service_singleton = None

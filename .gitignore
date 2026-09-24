@@ -13,6 +13,10 @@
 credentials.json
 token.json
 service-account*.json
+# Everything mounted into the backend as secrets, except the placeholder that
+# keeps the directory present for the compose bind mount.
+backend/secrets/*
+!backend/secrets/.gitkeep
 
 # -----------------------------------------------------------------------------
 # Python
