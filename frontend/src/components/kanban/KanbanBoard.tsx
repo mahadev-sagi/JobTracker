@@ -12,7 +12,13 @@ import {
   DragOverEvent
 } from '@dnd-kit/core';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
-import { Application, ApplicationStatus, Column } from '../../types';
+import {
+  Application,
+  ApplicationStatus,
+  BOARD_STATUSES,
+  Column,
+  STATUS_LABELS,
+} from '../../types';
 import KanbanColumn from './KanbanColumn';
 import KanbanCard from './KanbanCard';
 
@@ -21,13 +27,13 @@ interface KanbanBoardProps {
   onStatusChange: (id: string, newStatus: ApplicationStatus) => void;
 }
 
-const COLUMNS: Column[] = [
-  { id: ApplicationStatus.APPLIED, title: 'Applied' },
-  { id: ApplicationStatus.OA_RECEIVED, title: 'Online Assessment' },
-  { id: ApplicationStatus.INTERVIEW_SCHEDULED, title: 'Interview' },
-  { id: ApplicationStatus.OFFERED, title: 'Offer' },
-  { id: ApplicationStatus.REJECTED, title: 'Rejected' },
-];
+// Derived from BOARD_STATUSES rather than hand-listed. The previous literal
+// omitted four statuses, and an application in any of them was filtered out of
+// every column and vanished from the board without trace.
+const COLUMNS: Column[] = BOARD_STATUSES.map((id) => ({
+  id,
+  title: STATUS_LABELS[id],
+}));
 
 const KanbanBoard: React.FC<KanbanBoardProps> = ({ applications, onStatusChange }) => {
   const [activeId, setActiveId] = React.useState<string | null>(null);

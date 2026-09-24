@@ -48,8 +48,8 @@ const QueueTable: React.FC<QueueTableProps> = ({ applications, onMarkApplied }) 
                 <td className="px-6 py-4">
                   <div className="text-sm text-gray-900 dark:text-gray-100 flex items-center">
                     {app.role}
-                    {app.link && (
-                      <a href={app.link} target="_blank" rel="noopener noreferrer" className="ml-2 text-blue-500 hover:text-blue-600">
+                    {app.url && (
+                      <a href={app.url} target="_blank" rel="noopener noreferrer" className="ml-2 text-blue-500 hover:text-blue-600">
                         <ExternalLink className="w-4 h-4" />
                       </a>
                     )}

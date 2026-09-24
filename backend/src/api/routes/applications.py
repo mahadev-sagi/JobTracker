@@ -12,7 +12,7 @@ from uuid import UUID
 
 from asyncpg import Connection
 from asyncpg.exceptions import UniqueViolationError
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from src.api.dependencies import get_db
 from src.core.state_machine import ApplicationStatus, can_transition, transition
@@ -70,10 +70,14 @@ async def get_stats_summary(conn: Connection = Depends(get_db)):
 
 @router.get("/", response_model=list[ApplicationResponse])
 async def list_applications(
-    status_filter: str | None = Query(
+    response: Response,
+    status_filter: list[str] | None = Query(
         None,
         alias="status",
-        description="Filter by application status (e.g. 'applied', 'interviewing').",
+        description=(
+            "Filter by application status. Repeat the parameter to match any "
+            "of several, e.g. ?status=APPLIED&status=OFFERED."
+        ),
     ),
     search: str | None = Query(
         None,
@@ -111,16 +115,19 @@ async def list_applications(
     idx = 1  # asyncpg uses $1, $2, … placeholders
 
     if status_filter:
-        # Validate that the status value is known.
-        try:
-            ApplicationStatus(status_filter)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid status '{status_filter}'. Valid values: "
-                       f"{[s.value for s in ApplicationStatus]}",
-            ) from exc
-        conditions.append(f"status = ${idx}")
+        # Validate every requested status before building the query.
+        for value in status_filter:
+            try:
+                ApplicationStatus(value)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid status '{value}'. Valid values: "
+                           f"{[s.value for s in ApplicationStatus]}",
+                ) from exc
+        # Cast explicitly: asyncpg cannot infer the element type of an empty
+        # or text array being compared against an enum column.
+        conditions.append(f"status = ANY(${idx}::application_status[])")
         params.append(status_filter)
         idx += 1
 
@@ -132,6 +139,14 @@ async def list_applications(
         idx += 1
 
     where_clause = " AND ".join(conditions)
+
+    # Total matching rows, before paging. Returned as a header so the body
+    # stays a plain list; the UI needs it to page through the backlog, which
+    # runs to tens of thousands of scraped listings.
+    total = await conn.fetchval(
+        f"SELECT COUNT(*) FROM applications WHERE {where_clause}", *params
+    )
+    response.headers["X-Total-Count"] = str(total)
 
     # sort_by is validated above so safe for interpolation.
     query = f"""

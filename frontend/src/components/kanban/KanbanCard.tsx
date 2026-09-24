@@ -40,9 +40,9 @@ const KanbanCard: React.FC<KanbanCardProps> = ({ application }) => {
         <h4 className="font-medium text-gray-900 dark:text-gray-100 truncate pr-2">
           {application.role}
         </h4>
-        {application.link && (
+        {application.url && (
           <a
-            href={application.link}
+            href={application.url}
             target="_blank"
             rel="noopener noreferrer"
             className="text-gray-400 hover:text-blue-500 transition-colors"
@@ -61,7 +61,7 @@ const KanbanCard: React.FC<KanbanCardProps> = ({ application }) => {
       <div className="flex justify-between items-end mt-4">
         <div className="flex items-center text-xs text-gray-500 dark:text-gray-500">
           <Calendar className="w-3.5 h-3.5 mr-1" />
-          {application.date_applied || application.date_posted || 'Unknown'}
+          {application.date_posted ?? "Unknown"}
         </div>
         <StatusBadge status={application.status} />
       </div>
