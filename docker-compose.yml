@@ -23,9 +23,14 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       POSTGRES_DB: ${POSTGRES_DB:-jobtracker}
     ports:
-      - "5432:5432"
+      # Host port is overridable: a locally installed PostgreSQL already owns
+      # 5432 on some machines. The container-internal port never changes, so
+      # the backend's connection to `db:5432` is unaffected either way.
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Applied automatically by the postgres entrypoint on a fresh volume.
+      - ./backend/src/db/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jobtracker} -d ${POSTGRES_DB:-jobtracker}"]
       interval: 10s
@@ -50,7 +55,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-jobtracker}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-jobtracker}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-jobtracker}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-jobtracker}
     ports:
       - "8000:8000"
     volumes:
@@ -72,6 +77,8 @@ services:
       - backend
     environment:
       VITE_API_URL: ${BACKEND_URL:-http://localhost:8000}
+      VITE_API_PROXY_TARGET: http://backend:8000
+      VITE_USE_POLLING: "1"
     ports:
       - "5173:5173"
     volumes:

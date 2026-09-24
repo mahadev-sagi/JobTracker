@@ -178,7 +178,9 @@ $RECYCLE.BIN/
 # Logs & Databases
 # -----------------------------------------------------------------------------
 *.log
+# Ignores ad-hoc dumps, but schema migrations are source and must be tracked.
 *.sql
+!backend/src/db/migrations/*.sql
 *.sqlite
 *.sqlite3
 *.db

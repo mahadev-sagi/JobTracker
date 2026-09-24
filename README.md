@@ -155,7 +155,7 @@ npm run dev
 
 | Variable | Description | Default |
 |---|---|---|
-| `DATABASE_URL` | PostgreSQL async connection string | `postgresql+asyncpg://user:password@localhost:5432/jobtracker` |
+| `DATABASE_URL` | PostgreSQL async connection string | `postgresql://user:password@localhost:5432/jobtracker` |
 | `POSTGRES_USER` | PostgreSQL username | `jobtracker` |
 | `POSTGRES_PASSWORD` | PostgreSQL password | `changeme` |
 | `POSTGRES_DB` | PostgreSQL database name | `jobtracker` |
