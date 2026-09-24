@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hmac
 import logging
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import asyncpg
 from fastapi import Depends, Header, HTTPException, status

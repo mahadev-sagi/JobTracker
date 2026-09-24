@@ -13,13 +13,12 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
 from asyncpg import Connection
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from src.core.config import get_settings
-from src.core.state_machine import ApplicationStatus, transition, can_transition
 from src.api.dependencies import get_db
+from src.core.state_machine import ApplicationStatus, can_transition, transition
 from src.email_pipeline.extractor import extract_application_event
 from src.email_pipeline.gmail_service import GmailService
 
@@ -175,8 +174,6 @@ async def gmail_webhook(
     even if processing fails (to avoid infinite retries). Errors are logged
     but never surfaced as HTTP errors.
     """
-    settings = get_settings()
-
     try:
         # 1. Decode the base64-encoded Pub/Sub message data.
         decoded_bytes = base64.b64decode(payload.message.data)
@@ -272,7 +269,7 @@ async def gmail_webhook_test(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
-        )
+        ) from exc
 
     return {
         "matched": True,

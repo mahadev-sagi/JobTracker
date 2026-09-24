@@ -9,10 +9,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from src.email_pipeline.extractor import extract_application_event
 from src.email_pipeline.schemas import ApplicationEvent, EmailEventType
-
 
 # ── Helpers ──────────────────────────────────────────────────────────
 

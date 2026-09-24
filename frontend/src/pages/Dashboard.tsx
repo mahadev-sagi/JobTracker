@@ -1,12 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import KanbanBoard from '../components/kanban/KanbanBoard';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import { useApplications } from '../hooks/useApplications';
 import * as api from '../services/api';
 import { ApplicationStats } from '../types';
 import { Briefcase, FileCheck, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
-const StatCard = ({ title, value, icon: Icon, colorClass }: any) => (
+interface StatCardProps {
+  title: string;
+  value: number;
+  icon: LucideIcon;
+  colorClass: string;
+}
+
+const StatCard = ({ title, value, icon: Icon, colorClass }: StatCardProps) => (
   <div className="bg-white dark:bg-zinc-900 rounded-xl p-5 shadow-sm border border-gray-100 dark:border-zinc-800 flex items-center">
     <div className={`p-3 rounded-lg ${colorClass} mr-4`}>
       <Icon className="w-6 h-6 text-white" />

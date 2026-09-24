@@ -8,9 +8,7 @@ Covers valid transitions, invalid transitions (ValueError), the
 from __future__ import annotations
 
 import pytest
-
-from src.core.state_machine import ApplicationStatus, VALID_TRANSITIONS, can_transition, transition
-
+from src.core.state_machine import VALID_TRANSITIONS, ApplicationStatus, can_transition, transition
 
 # ═══════════════════════════════════════════════════════════════════
 #  Enum completeness
@@ -134,7 +132,7 @@ class TestTransition:
 
     def test_invalid_transition_raises_value_error(self):
         """An illegal transition must raise ``ValueError``."""
-        with pytest.raises(ValueError, match="Cannot transition"):
+        with pytest.raises(ValueError, match="Invalid transition"):
             transition(ApplicationStatus.REJECTED, ApplicationStatus.APPLIED)
 
     def test_terminal_rejected_raises(self):

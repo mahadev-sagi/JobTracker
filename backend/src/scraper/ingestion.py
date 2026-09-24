@@ -9,6 +9,7 @@ INSERT … ON CONFLICT DO NOTHING via asyncpg.
 from __future__ import annotations
 
 import logging
+
 import httpx
 
 from src.core.config import get_settings

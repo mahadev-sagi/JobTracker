@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import QueueFilters from '../components/queue/QueueFilters';
 import QueueTable from '../components/queue/QueueTable';
 import LoadingSpinner from '../components/common/LoadingSpinner';

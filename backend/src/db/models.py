@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.core.state_machine import ApplicationStatus
 
@@ -33,9 +33,15 @@ class ApplicationBase(BaseModel):
 
 # ── Create schema (incoming payload) ────────────────────────────────────
 class ApplicationCreate(ApplicationBase):
-    """Schema for creating a new application — inherits all base fields."""
+    """Schema for creating a new application.
 
-    pass
+    Adds the two optional fields a caller may set at creation time on top of
+    the shared base. The scraper leaves both at their defaults; the dashboard
+    uses them when a row is entered by hand.
+    """
+
+    status: ApplicationStatus = ApplicationStatus.UNAPPLIED
+    notes: str | None = None
 
 
 # ── Full DB record ──────────────────────────────────────────────────────

@@ -7,15 +7,13 @@ the HTTP fetch and the database connection pool.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from src.db.models import ApplicationCreate
 from src.scraper.parser import parse_listings
-
 
 # ═══════════════════════════════════════════════════════════════════
 #  Parser tests
@@ -66,7 +64,7 @@ class TestParser:
         assert google.url == "https://careers.google.com/jobs/123"
         assert google.source == "SIMPLIFY_SCRAPER"
         assert google.date_posted is not None
-        expected_date = datetime.fromtimestamp(1_700_000_000, tz=timezone.utc).date()
+        expected_date = datetime.fromtimestamp(1_700_000_000, tz=UTC).date()
         assert google.date_posted == expected_date
 
     def test_inactive_listings_filtered_out(self):
@@ -166,7 +164,6 @@ class TestIngestion:
     async def test_run_ingestion_http_error(self):
         """When the HTTP fetch fails, errors=1 and nothing else changes."""
         import httpx as _httpx
-
         from src.scraper.ingestion import run_ingestion
 
         mock_http = AsyncMock()

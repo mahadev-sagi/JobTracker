@@ -47,7 +47,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ applications, onStatusChange 
     setActiveId(event.active.id as string);
   };
 
-  const handleDragOver = (event: DragOverEvent) => {
+  const handleDragOver = (_event: DragOverEvent) => {
     // For visual updates during drag if we were reordering within same column
     // Not strictly needed for simple status changes across columns
   };

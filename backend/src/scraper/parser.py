@@ -8,7 +8,7 @@ Pydantic objects ready for database insertion.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, date, datetime
 
 from src.db.models import ApplicationCreate
 
@@ -66,14 +66,16 @@ def parse_listings(raw_json: list[dict]) -> list[ApplicationCreate]:
             # URL
             url = entry.get("url") or None
 
-            # Date — Unix timestamp in *seconds*
-            date_posted: datetime | None = None
+            # Date — Unix timestamp in *seconds*.
+            # ApplicationCreate.date_posted is a `date`, and Pydantic rejects a
+            # datetime that carries a non-zero time, so truncate to the UTC day.
+            date_posted: date | None = None
             ts = entry.get("date_posted")
             if ts is not None:
                 try:
                     date_posted = datetime.fromtimestamp(
-                        float(ts), tz=timezone.utc
-                    )
+                        float(ts), tz=UTC
+                    ).date()
                 except (ValueError, TypeError, OSError):
                     logger.warning(
                         "Listing %d has invalid date_posted=%r — ignored.", idx, ts

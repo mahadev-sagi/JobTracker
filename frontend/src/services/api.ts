@@ -1,11 +1,21 @@
 import axios from 'axios';
 import { Application, ApplicationStats, ApplicationStatus } from '../types';
 
+/** Query parameters accepted by GET /api/applications. */
+export interface ListApplicationsParams {
+  status?: ApplicationStatus;
+  search?: string;
+  sort_by?: 'created_at' | 'updated_at' | 'company' | 'role' | 'status';
+  order?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
+}
+
 const api = axios.create({
   baseURL: '/api',
 });
 
-export const getApplications = async (params?: any) => {
+export const getApplications = async (params?: ListApplicationsParams) => {
   const response = await api.get<Application[]>('/applications', { params });
   return response.data;
 };

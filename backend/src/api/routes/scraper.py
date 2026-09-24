@@ -8,12 +8,11 @@ retrieve the status / results of the most recent run.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 
-from src.core.config import get_settings
 from src.scraper.ingestion import run_ingestion
 
 logger = logging.getLogger(__name__)
@@ -46,7 +45,7 @@ async def _run_scraper_task() -> None:
 
     _last_run.update(
         {
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": datetime.now(UTC).isoformat(),
             "finished_at": None,
             "status": "running",
             "jobs_found": 0,
@@ -61,9 +60,11 @@ async def _run_scraper_task() -> None:
 
         _last_run.update(
             {
-                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "finished_at": datetime.now(UTC).isoformat(),
                 "status": "completed",
-                "jobs_found": result.get("jobs_found", 0),
+                # run_ingestion() reports this as `total_found`; the API has
+                # always exposed it as `jobs_found`.
+                "jobs_found": result.get("total_found", 0),
                 "new_inserted": result.get("new_inserted", 0),
                 "duplicates_skipped": result.get("duplicates_skipped", 0),
             }
@@ -78,7 +79,7 @@ async def _run_scraper_task() -> None:
     except Exception as exc:
         _last_run.update(
             {
-                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "finished_at": datetime.now(UTC).isoformat(),
                 "status": "failed",
                 "error": str(exc),
             }

@@ -13,8 +13,8 @@ export const useApplications = () => {
       setError(null);
       const data = await api.getApplications();
       setApplications(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to fetch applications');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch applications');
     } finally {
       setLoading(false);
     }
@@ -27,8 +27,8 @@ export const useApplications = () => {
         prev.map(app => (app.id === id ? { ...app, status } : app))
       );
       return updatedApp;
-    } catch (err: any) {
-      setError(err.message || 'Failed to update application status');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update application status');
       throw err;
     }
   };

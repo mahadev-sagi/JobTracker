@@ -8,16 +8,15 @@ updating, deleting, and dashboard statistics.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
 from asyncpg import Connection
+from asyncpg.exceptions import UniqueViolationError
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from src.core.config import get_settings
-from src.core.state_machine import ApplicationStatus, transition, can_transition
-from src.db.models import ApplicationResponse, ApplicationCreate, ApplicationUpdate
 from src.api.dependencies import get_db
+from src.core.state_machine import ApplicationStatus, can_transition, transition
+from src.db.models import ApplicationCreate, ApplicationResponse, ApplicationUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +70,12 @@ async def get_stats_summary(conn: Connection = Depends(get_db)):
 
 @router.get("/", response_model=list[ApplicationResponse])
 async def list_applications(
-    status_filter: Optional[str] = Query(
+    status_filter: str | None = Query(
         None,
         alias="status",
         description="Filter by application status (e.g. 'applied', 'interviewing').",
     ),
-    search: Optional[str] = Query(
+    search: str | None = Query(
         None,
         description="Case-insensitive search across company name and role.",
     ),
@@ -115,12 +114,12 @@ async def list_applications(
         # Validate that the status value is known.
         try:
             ApplicationStatus(status_filter)
-        except ValueError:
+        except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid status '{status_filter}'. Valid values: "
                        f"{[s.value for s in ApplicationStatus]}",
-            )
+            ) from exc
         conditions.append(f"status = ${idx}")
         params.append(status_filter)
         idx += 1
@@ -184,32 +183,38 @@ async def create_application(
     conn: Connection = Depends(get_db),
 ):
     """Create a new job application record."""
-    # Default to the initial status if not explicitly provided.
-    initial_status = (
-        payload.status if payload.status else ApplicationStatus.BOOKMARKED.value
-    )
+    # ApplicationCreate.status is already constrained to the enum by Pydantic,
+    # so an invalid value is rejected as a 422 before reaching this point.
+    initial_status = payload.status.value
 
     try:
-        ApplicationStatus(initial_status)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid initial status '{initial_status}'.",
+        row = await conn.fetchrow(
+            """
+            INSERT INTO applications
+                (company, role, location, url, date_posted, source, status, notes)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::application_status, $8)
+            RETURNING *
+            """,
+            payload.company,
+            payload.role,
+            payload.location,
+            payload.url,
+            payload.date_posted,
+            payload.source,
+            initial_status,
+            payload.notes,
         )
-
-    row = await conn.fetchrow(
-        """
-        INSERT INTO applications (company, role, url, status, source, notes)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING *
-        """,
-        payload.company,
-        payload.role,
-        payload.url,
-        initial_status,
-        payload.source,
-        payload.notes,
-    )
+    except UniqueViolationError as exc:
+        # The schema dedupes on listing URL, falling back to
+        # company + role + location. Both are surfaced as a conflict rather
+        # than a 500 so the caller can tell a duplicate from a real failure.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"An application for '{payload.role}' at '{payload.company}' "
+                "already exists."
+            ),
+        ) from exc
     logger.info("Created application %s for %s at %s", row["id"], payload.role, payload.company)
     return dict(row)
 
@@ -275,7 +280,7 @@ async def update_application(
         idx += 1
 
     # Always bump updated_at.
-    set_parts.append(f"updated_at = NOW()")
+    set_parts.append("updated_at = NOW()")
 
     set_clause = ", ".join(set_parts)
     params.append(app_id)

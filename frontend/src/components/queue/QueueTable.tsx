@@ -1,5 +1,5 @@
 import React from 'react';
-import { Application, ApplicationStatus } from '../../types';
+import { Application } from '../../types';
 import { ExternalLink, Check, Calendar } from 'lucide-react';
 
 interface QueueTableProps {
