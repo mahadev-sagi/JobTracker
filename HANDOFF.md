@@ -1,3 +1,68 @@
+# Current handoff - 2026-09-27
+
+This section supersedes the historical notes below.
+
+## Running deployment
+
+The local personal deployment is running at http://localhost:5173, using:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile tunnel up -d --build
+```
+
+- Compiled React app served by nginx; backend code baked into its image.
+- Existing database volume retained; API reports 15,160 active rows.
+- Ports 5173, 8000, 8080, and 5433 bound to 127.0.0.1 only.
+- Existing host cloudflared process targets http://localhost:8080.
+- Gateway permits only health and Gmail push; local checks confirmed 404 for
+  applications, docs, and watch registration, and 401 for anonymous push.
+- Public tunnel URL was not recovered or tested externally in this session.
+- Production override uses one backend worker because scraper run state is
+  still in memory. It resets on restart.
+
+## Changes and validation
+
+Removed silent router-import failure. Webhook authentication now fails closed
+in development too. Gmail history and classifier failures propagate; failed
+batches return 503 without advancing the cursor. Application updates and the
+processed-message marker share a transaction. This fixes several silent-loss
+paths, but does not establish complete delivery correctness (see below).
+
+85 backend tests pass, including new HTTP authentication and retry tests.
+Backend Ruff, frontend ESLint, and production frontend build pass. Rebuilt
+Docker deployment is healthy; dashboard, proxied list/stats, and gateway
+restrictions were checked against the running stack. No live Gmail or LLM
+request was made. README now describes the actual application and deployment.
+
+## Requires user input / unfinished
+
+Asked whether deployment should stay on this PC or move to an always-on cloud
+server; no answer yet. No cloud resources were provisioned.
+
+Gmail remains unconnected: GOOGLE_CLOUD_PROJECT_ID, GMAIL_USER_EMAIL, and
+GOOGLE_CREDENTIALS_JSON are empty; backend/secrets has no OAuth token. Asked
+whether the user has a project and a downloaded Desktop OAuth credentials
+file. README includes setup steps. Do not paste credentials into chat.
+
+Before declaring Gmail ready for ongoing use:
+- Configure authenticated OIDC push, Gmail OAuth, a stable tunnel, and daily
+  watch renewal; run an actual incoming-mail test with the user.
+- Serialize overlapping pushes and prevent older notifications from moving
+  the history cursor backwards. Current processing is synchronous and can
+  exceed push request deadlines for large batches.
+- Fix ambiguous company-only matching: current fallback can select the wrong
+  application when multiple roles exist. The old notes overstate this fix.
+- Handle expired Gmail history IDs with an explicit recovery procedure.
+
+Dashboard has no authentication; keep it local until an authenticated access
+layer is in place. AWS Terraform remains incomplete. Automated backups and
+persistent scraper run state are not configured. The PC and Docker must stay
+running for this deployment to be available.
+
+---
+
+# Historical handoff (superseded where noted above)
+
 # JobTracker — Handoff
 
 **Last updated:** 2026-09-24 · **Branch:** `main` · **HEAD:** `8ee0600`

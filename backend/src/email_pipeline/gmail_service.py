@@ -163,7 +163,7 @@ class GmailService:
             return await asyncio.to_thread(_fetch)
         except Exception:
             logger.exception("Failed to fetch history since %s", history_id)
-            return []
+            raise
 
     async def get_message_content(
         self,

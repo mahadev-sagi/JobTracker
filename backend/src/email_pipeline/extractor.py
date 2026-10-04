@@ -67,7 +67,8 @@ async def extract_application_event(
     Returns ``None`` when:
     - the model classifies the email as ``GENERAL``
     - the model's confidence is below 0.5
-    - an API or parsing error occurs
+
+    API and parsing failures propagate so webhook delivery can be retried.
 
     Parameters
     ----------
@@ -102,8 +103,7 @@ async def extract_application_event(
         event: ApplicationEvent | None = completion.choices[0].message.parsed
 
         if event is None:
-            logger.warning("OpenAI returned an unparseable response.")
-            return None
+            raise ValueError("LLM returned an unparseable response.")
 
         # ── Business-logic gate ─────────────────────────────────────
         if event.event_type is EmailEventType.GENERAL:
@@ -129,4 +129,4 @@ async def extract_application_event(
 
     except Exception:
         logger.exception("Failed to extract application event from email: %s", email_subject)
-        return None
+        raise

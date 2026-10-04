@@ -55,9 +55,8 @@ async def verify_pubsub_token(
     2. **Shared secret** (set ``PUBSUB_VERIFICATION_TOKEN``) — a constant
        bearer string, adequate for local development over a tunnel.
 
-    If neither is configured the request is refused in production, and allowed
-    with a loud warning in development so the pipeline can be exercised
-    locally without ceremony.
+    If neither is configured the request is refused in every environment,
+    since development servers can also be exposed through a tunnel.
 
     Raises
     ------
@@ -70,20 +69,10 @@ async def verify_pubsub_token(
     secret_mode = bool(settings.PUBSUB_VERIFICATION_TOKEN)
 
     if not oidc_mode and not secret_mode:
-        if settings.is_production:
-            logger.error(
-                "Gmail webhook is unauthenticated: set PUBSUB_AUDIENCE or "
-                "PUBSUB_VERIFICATION_TOKEN."
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Webhook authentication is not configured.",
-            )
-        logger.warning(
-            "Gmail webhook accepted WITHOUT authentication — development only. "
-            "Set PUBSUB_AUDIENCE (preferred) or PUBSUB_VERIFICATION_TOKEN."
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Webhook authentication is not configured.",
         )
-        return True
 
     if not authorization:
         raise HTTPException(

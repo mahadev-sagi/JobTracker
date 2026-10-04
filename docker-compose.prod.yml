@@ -1,0 +1,15 @@
+# Personal deployment on this PC. Requires Docker Compose >= 2.24.4.
+# Run together with docker-compose.yml; retains the existing Postgres volume.
+services:
+  backend:
+    volumes: !override
+      - ./backend/secrets:/app/secrets:ro
+    environment:
+      ENVIRONMENT: production
+    # Scraper progress currently lives in process memory.
+    command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+  frontend:
+    build:
+      target: production
+    volumes: !reset []
+    environment: !reset {}

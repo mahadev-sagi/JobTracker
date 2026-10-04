@@ -67,29 +67,14 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# Routers — imported lazily so the module graph stays clean.
-# Each router file can be created independently later; the import is
-# wrapped in a try/except so the app still boots if a router is missing
-# during early development.
+# Routers fail at startup if an import is broken, rather than silently
+# serving an incomplete API.
 # ---------------------------------------------------------------------------
-_ROUTERS: list[tuple[str, str, str]] = [
-    ("src.api.routes.applications", "router", ""),
-    ("src.api.routes.webhooks", "router", ""),
-    ("src.api.routes.scraper", "router", ""),
-]
+from src.api.routes import applications, scraper, webhooks  # noqa: E402
 
-for module_path, attr_name, prefix in _ROUTERS:
-    try:
-        import importlib
-
-        mod = importlib.import_module(module_path)
-        router = getattr(mod, attr_name)
-        app.include_router(router, prefix=prefix)
-        logger.info("Registered router %s", module_path)
-    except (ModuleNotFoundError, AttributeError) as exc:
-        logger.warning(
-            "Skipping router %s – not yet implemented (%s)", module_path, exc
-        )
+app.include_router(applications.router)
+app.include_router(webhooks.router)
+app.include_router(scraper.router)
 
 
 # ---------------------------------------------------------------------------

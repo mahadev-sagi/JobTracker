@@ -158,8 +158,8 @@ async def test_general_event_returns_none():
 
 
 @pytest.mark.asyncio
-async def test_openai_exception_returns_none():
-    """When the OpenAI call raises an exception, the extractor returns None."""
+async def test_openai_exception_propagates_for_retry():
+    """Provider outages must not be mistaken for unrelated mail."""
     mock_client = AsyncMock()
     mock_client.beta.chat.completions.parse = AsyncMock(
         side_effect=RuntimeError("API unavailable")
@@ -169,10 +169,9 @@ async def test_openai_exception_returns_none():
         "src.email_pipeline.extractor.AsyncOpenAI",
         return_value=mock_client,
     ):
-        result = await extract_application_event(
-            email_subject="Test",
-            email_body="body",
-            sender="x@example.com",
-        )
-
-    assert result is None
+        with pytest.raises(RuntimeError, match="API unavailable"):
+            await extract_application_event(
+                email_subject="Test",
+                email_body="body",
+                sender="x@example.com",
+            )

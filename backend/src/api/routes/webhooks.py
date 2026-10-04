@@ -307,9 +307,8 @@ async def gmail_webhook(
     """
     Receive a Gmail Pub/Sub push notification.
 
-    Google Cloud Pub/Sub requires that this endpoint always returns 200 OK,
-    even if processing fails (to avoid infinite retries). Errors are logged
-    but never surfaced as HTTP errors.
+    Acknowledge only completed batches. Failed deliveries return 503 so
+    Pub/Sub retries without losing emails or advancing past a failed message.
     """
     try:
         # 1. Decode the base64-encoded Pub/Sub message data.
@@ -371,23 +370,22 @@ async def gmail_webhook(
                 #    LLM and takes (subject, body, sender) — not a raw message.
                 event = await extract_application_event(subject, body, sender)
 
-                await _mark_processed(conn, message_id, thread_id)
-
                 if event is None:
-                    # GENERAL, low confidence, or an extraction error.
+                    # GENERAL or low confidence; extraction failures raise.
+                    await _mark_processed(conn, message_id, thread_id)
                     logger.debug("Email %s is not an application event.", message_id)
                     skipped_count += 1
                     continue
 
                 # 4. Match to an existing application, or create one.
-                application = await _match_or_create_application(
-                    conn, event, thread_id=thread_id, subject=subject
-                )
-
-                # 5. Apply the status implied by the event type.
-                await _apply_status_update(
-                    conn, application, status_for_event(event.event_type)
-                )
+                async with conn.transaction():
+                    application = await _match_or_create_application(
+                        conn, event, thread_id=thread_id, subject=subject
+                    )
+                    await _apply_status_update(
+                        conn, application, status_for_event(event.event_type)
+                    )
+                    await _mark_processed(conn, message_id, thread_id)
 
                 processed_count += 1
 
@@ -398,6 +396,8 @@ async def gmail_webhook(
 
         # 6. Advance the cursor only after the batch, so a mid-batch crash
         #    replays the remainder rather than losing it.
+        if errors:
+            raise HTTPException(status_code=503, detail="Email processing failed; retry delivery.")
         await _save_sync_cursor(conn, email_address, notified_history_id)
 
         logger.info(
@@ -413,16 +413,16 @@ async def gmail_webhook(
             "errors": len(errors),
         }
 
-    except GmailAuthError as exc:
-        # A configuration problem, not a crash. Still 200, because retrying
-        # will not fix it and Pub/Sub would redeliver forever.
-        logger.error("Gmail credentials unusable — cannot process webhook: %s", exc)
-        return {"status": "error", "detail": "gmail credentials not configured"}
+    except HTTPException:
+        raise
 
-    except Exception:
-        # Catch-all: always return 200 to Pub/Sub so it doesn't redeliver.
+    except GmailAuthError as exc:
+        logger.error("Gmail credentials unusable — cannot process webhook: %s", exc)
+        raise HTTPException(status_code=503, detail="Gmail credentials not configured") from exc
+
+    except Exception as exc:
         logger.exception("Unexpected error in Gmail webhook handler")
-        return {"status": "error", "detail": "internal processing error"}
+        raise HTTPException(status_code=503, detail="Email processing failed; retry delivery.") from exc
 
 
 # ---------------------------------------------------------------------------
