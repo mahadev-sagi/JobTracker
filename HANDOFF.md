@@ -1,4 +1,4 @@
-# Current handoff - 2026-10-04 (branch `multi-user`)
+# Current handoff - 2026-10-04 (`main`, pushed)
 
 This section supersedes everything below it.
 
@@ -8,15 +8,16 @@ The owner wants JobTracker hosted, usable from any computer, by invited
 friends (under 100), at zero cost. Decisions made:
 
 - Hosting: a single small AWS EC2 instance running this Docker Compose stack
-  (Postgres in a container, not RDS), on student/free credits. The old AWS
-  Terraform/Lambda design in `infra/aws` is abandoned.
+  (Postgres in a container, not RDS), on an AWS **Free plan** account so it
+  can never be billed beyond the sign-up credits. The old AWS Terraform/Lambda
+  design has been deleted.
 - Domain: a free subdomain (DuckDNS), HTTPS via Caddy. Fallback: GitHub
   Student Pack domain if Google rejects the DuckDNS redirect URI.
 - Access: Google sign-in, invite list in `ALLOWED_EMAILS`, Google OAuth app
   left in **Testing** mode (100 test users) to avoid paid verification of the
   restricted Gmail scope.
 
-## Done on this branch (not merged, not deployed)
+## Done (on `main`, not yet deployed)
 
 - Multi-user schema (`003_multi_user.sql`): users, sessions, shared
   `listings`, per-user `applications`, per-user `gmail_accounts` with
@@ -42,11 +43,15 @@ friends (under 100), at zero cost. Decisions made:
   in, board, queue, apply, sign out, second user isolation, uninvited user
   refused. No real Google OAuth, Gmail or LLM call has been made.
 
-The local Docker stack on this PC still runs the old `main` code against the
-unmigrated database. A pre-migration backup is in `backups/` (2026-10-04).
-The only non-scraped rows in that database are demo data.
+**Local PC caution:** the four running containers are still the old
+single-user build. The dev `backend` container bind-mounts the source, so
+restarting it (or `docker compose up`) runs the new code and migrates the
+local database to the multi-user schema. A pre-migration backup is in
+`backups/` (2026-10-04); the only non-scraped rows are demo data. The
+`jobtracker-webhook-gateway` container is no longer defined anywhere and can
+be stopped.
 
-## Deployment files (step 2, done)
+## Deployment files (done)
 
 `infra/deploy/`: production compose (Postgres, backend, Caddy web image),
 Caddyfile, `bootstrap.sh` (Ubuntu 24.04: Docker, swap, generated secrets,
@@ -62,19 +67,108 @@ database, backup rotation and a successful restore; ~145 MB memory total.
 Not yet run on a real Ubuntu server: `bootstrap.sh`, `update.sh`, cron,
 DuckDNS, Let's Encrypt.
 
-## Next
+On GitHub (2026-10-04): CI green on `main` (including the real-Postgres
+tests), and the Build images workflow pushed `ghcr.io/mahadev-sagi/
+jobtracker-backend` and `jobtracker-web`. Both pull anonymously (verified),
+so the server needs no registry login.
 
-1. Owner: AWS account and budget alert, launch the instance, DuckDNS name
-   (`infra/deploy/README.md`).
-2. Merge `multi-user` into `main` so images get built; make the two GHCR
-   packages public.
-3. Run bootstrap on the server and bring the stack up.
-4. Google setup (README) with the real domain, then a live test: sign in,
-   connect Gmail, send a test rejection email.
-5. Known gaps: some scraped listings fail validation (field too long) and are
-   skipped; the backend image is ~480 MB (google-api-python-client, pytest);
-   the Gemini free tier may use submitted content to improve Google's
-   products, which matters once friends' email goes through it.
+## Next steps
+
+Full detail for steps 1 to 4 is in `infra/deploy/README.md`; Google setup is
+in `README.md`. Never paste keys, tokens or the `.pem` file into chat.
+
+### 1. AWS account (owner)
+
+- [ ] Create the account and choose the **Free plan**, not the paid plan.
+      New accounts get about $100–200 of credits for 6 months; a free-plan
+      account is never charged beyond them. Check the current terms on the
+      sign-up page.
+- [ ] Billing and Cost Management → Budgets → **zero spend** budget with an
+      email alert. Billing → Credits shows what is left.
+
+### 2. Launch the server (owner)
+
+EC2 → Launch instance:
+
+- [ ] Image: **Ubuntu Server 24.04 LTS**, 64-bit x86
+- [ ] Type: **`t3.micro`** (or whatever is marked *Free tier eligible*; must
+      be x86, the images are not built for ARM)
+- [ ] Key pair: create one and keep the `.pem` file safe
+- [ ] Network: SSH from **My IP only**; HTTP and HTTPS from anywhere
+- [ ] Storage: **20 GiB gp3** (at most 30)
+- [ ] Note the public IPv4 address
+
+Expected use: about $13 a month of credits (instance, public IPv4, disk),
+roughly $80 over 6 months.
+
+### 3. DuckDNS (owner)
+
+- [ ] Sign in at duckdns.org, claim a subdomain, note the token. Both go
+      only into the server's `.env`.
+
+### 4. Set up the server (owner, with help)
+
+```powershell
+ssh -i path	okey.pem ubuntu@PUBLIC_IP
+```
+
+```bash
+sudo git clone https://github.com/mahadev-sagi/JobTracker.git /opt/jobtracker
+sudo bash /opt/jobtracker/infra/deploy/bootstrap.sh
+sudo nano /opt/jobtracker/infra/deploy/.env
+```
+
+- [ ] In `.env` set `DOMAIN` (`name.duckdns.org`), `ACME_EMAIL`,
+      `DUCKDNS_SUBDOMAIN`, `DUCKDNS_TOKEN`, `ADMIN_EMAILS` (own Google
+      address), and `LLM_API_KEY`. The database password and encryption key
+      are already generated.
+- [ ] `sudo /opt/jobtracker/infra/deploy/duckdns.sh`
+- [ ] `cd /opt/jobtracker/infra/deploy && sudo docker compose up -d`
+- [ ] `https://DOMAIN` loads with a valid certificate; the first scrape
+      fills the queue within a couple of minutes.
+- [ ] Save a copy of `TOKEN_ENCRYPTION_KEY` somewhere safe off the server.
+
+The sign-in page will say sign-in is not configured until step 5.
+
+### 5. Google setup (next working session)
+
+- [ ] Confirm the Google Cloud project exists; enable Gmail API and Pub/Sub.
+- [ ] OAuth consent screen: External, **Testing**; add each invitee as a
+      test user (max 100).
+- [ ] OAuth client (Web application) with redirect URIs
+      `https://DOMAIN/api/auth/callback` and `https://DOMAIN/api/gmail/callback`.
+      If Google rejects the duckdns.org domain, fall back to a GitHub Student
+      Pack domain.
+- [ ] Pub/Sub topic, publisher grant for
+      `gmail-api-push@system.gserviceaccount.com`, authenticated push
+      subscription to `https://DOMAIN/api/webhooks/gmail` (600 s ack
+      deadline, ~10 s minimum retry backoff).
+- [ ] Fill the Google values and `PUBSUB_*` into `.env`;
+      `sudo docker compose up -d`.
+- [ ] `infra/scripts/setup_pubsub.sh` predates the multi-user design and
+      still references `GMAIL_USER_EMAIL`; update or delete it.
+
+### 6. Live test (owner, together)
+
+- [ ] Sign in with Google; add an application by hand.
+- [ ] Settings → Connect Gmail; confirm "notifications active".
+- [ ] Send a fake rejection email for that company and role to the
+      connected inbox; the card should move to Rejected and appear under
+      Settings → Recent email activity.
+- [ ] Invite one friend (`ALLOWED_EMAILS` plus Google test user) and confirm
+      they see an empty board and the full queue.
+
+### Known gaps
+
+- Some scraped listings fail validation (a field exceeds its length) and are
+  skipped.
+- The backend image is ~480 MB (google-api-python-client, pytest in runtime
+  requirements).
+- The Gemini free tier may use submitted content to improve Google's
+  products, which matters once friends' email goes through it; consider a
+  paid tier or another provider before inviting others.
+- `bootstrap.sh`, `update.sh`, cron, DuckDNS and Let's Encrypt are untested
+  until the real server exists.
 
 ---
 
