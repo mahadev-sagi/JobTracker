@@ -94,14 +94,13 @@ new database the backend applies the schema and runs the first scrape
 Until the Google settings are filled in (README, "Google setup"), the sign-in
 page says sign-in is not configured. That is expected.
 
-## Images must be pullable
+## Images
 
-The first images appear when `main` first passes CI after this setup is
-merged. GHCR packages start out **private** even for a public repository.
-Make both public once: GitHub → your profile → **Packages** →
-`jobtracker-backend` → Package settings → Change visibility → Public. Same for
-`jobtracker-web`. They contain no secrets; secrets live only in the server's
-`.env`.
+Images are rebuilt whenever `main` passes CI and are public, inheriting the
+repository's visibility, so the server pulls them without credentials. If a
+pull ever fails with "unauthorized", check GitHub → your profile →
+**Packages** → each package → Package settings → visibility. The images hold
+no secrets; those live only in the server's `.env`.
 
 ## Day to day
 
