@@ -1,0 +1,90 @@
+# =============================================================================
+# JobTracker — production stack for a single small server.
+#
+# Run from this directory, with a .env next to this file (see .env.example):
+#   docker compose up -d
+#
+# Images are built by .github/workflows/deploy.yml and pulled from GHCR; the
+# server never builds anything, which a 1 GB instance could not do reliably.
+# infra/deploy/update.sh keeps the stack current.
+# =============================================================================
+
+name: jobtracker
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jobtracker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-jobtracker}
+    # Sized for a 1 GB instance shared with the backend and Caddy. The data
+    # set is tens of megabytes; these are still generous for it.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - effective_cache_size=256MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - max_connections=30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Not published: only the backend talks to the database.
+
+  backend:
+    image: ghcr.io/${GITHUB_OWNER:-mahadev-sagi}/jobtracker-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-jobtracker}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-jobtracker}
+      ENVIRONMENT: production
+      PUBLIC_URL: https://${DOMAIN:?set DOMAIN in .env}
+    # One worker is plenty for under a hundred users and keeps memory low.
+    # Everything shared (sessions, scraper runs, job locks) is in Postgres, so
+    # raising this later is safe.
+    command:
+      [
+        "uvicorn", "src.main:app",
+        "--host", "0.0.0.0", "--port", "8000",
+        "--workers", "1",
+        "--proxy-headers", "--forwarded-allow-ips", "*",
+      ]
+
+  web:
+    image: ghcr.io/${GITHUB_OWNER:-mahadev-sagi}/jobtracker-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates. Losing them is harmless but re-issuing too often hits
+      # Let's Encrypt rate limits, so they persist.
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

@@ -14,11 +14,11 @@ Requires Docker Desktop and Docker Compose 2.24.4 or newer. Copy
 `.env.example` to `.env` if you do not already have one.
 
 ```powershell
-docker compose up -d --build                                               # development (Vite, source mounts)
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build   # compiled frontend via nginx
+docker compose up -d --build
 ```
 
-Open http://localhost:5173. Without a Google OAuth client, set
+This is the development setup: Vite with source mounts. Open
+http://localhost:5173. Without a Google OAuth client, set
 `DEV_LOGIN_ENABLED=true` (development only) to sign in as any address.
 
 Schema migrations in `backend/src/db/migrations` are applied by the backend at
@@ -36,6 +36,12 @@ claim the old applications for your account:
 ```powershell
 docker compose exec backend python -m scripts.claim_legacy_data you@gmail.com
 ```
+
+## Deployment
+
+Production runs on one small server (AWS EC2) with Caddy for HTTPS, images
+built by GitHub Actions, and cron for updates, backups and DuckDNS. See
+[`infra/deploy/README.md`](infra/deploy/README.md).
 
 ## Google setup
 
@@ -107,5 +113,4 @@ connection. State-changing API calls require the header
 | `POST /api/scraper/run` | Admin: scrape now |
 | `GET /api/scraper/status` | Last scraper run |
 
-The AWS Terraform and Lambda files under `infra/aws` predate this design and
-are not used. See `HANDOFF.md` for status and next steps.
+See `HANDOFF.md` for status and next steps.

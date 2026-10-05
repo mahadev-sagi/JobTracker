@@ -46,16 +46,35 @@ The local Docker stack on this PC still runs the old `main` code against the
 unmigrated database. A pre-migration backup is in `backups/` (2026-10-04).
 The only non-scraped rows in that database are demo data.
 
+## Deployment files (step 2, done)
+
+`infra/deploy/`: production compose (Postgres, backend, Caddy web image),
+Caddyfile, `bootstrap.sh` (Ubuntu 24.04: Docker, swap, generated secrets,
+cron), `update.sh` (pull-based deploys every 5 min), `backup.sh` (nightly,
+verified, 14 kept, optional S3), `duckdns.sh`. `.github/workflows/deploy.yml`
+builds images to GHCR after CI passes on `main`. Removed: `infra/aws`, the
+webhook gateway, `docker-compose.prod.yml`, the nginx frontend stage.
+
+Verified locally with production images and DOMAIN=localhost: HTTP to HTTPS
+redirect, SPA routes, security headers, API docs not exposed, CSRF guard,
+1 MB body limit, webhook fails closed, migrations and first scrape on a fresh
+database, backup rotation and a successful restore; ~145 MB memory total.
+Not yet run on a real Ubuntu server: `bootstrap.sh`, `update.sh`, cron,
+DuckDNS, Let's Encrypt.
+
 ## Next
 
-1. Owner: create the AWS account (billing alert at $1), claim a DuckDNS name,
-   confirm the Google Cloud project exists.
-2. Deployment files: Caddy reverse proxy (HTTPS), production compose for a
-   1 GB instance (prebuilt images, swap), backup cron, deploy from GitHub.
-   Decide what to do with the now-redundant `webhook-gateway` profile.
-3. Google setup per README with the real domain; then a live test with the
-   owner: sign in, connect Gmail, send a test rejection email.
-4. Merge `multi-user` into `main` once deployed and verified.
+1. Owner: AWS account and budget alert, launch the instance, DuckDNS name
+   (`infra/deploy/README.md`).
+2. Merge `multi-user` into `main` so images get built; make the two GHCR
+   packages public.
+3. Run bootstrap on the server and bring the stack up.
+4. Google setup (README) with the real domain, then a live test: sign in,
+   connect Gmail, send a test rejection email.
+5. Known gaps: some scraped listings fail validation (field too long) and are
+   skipped; the backend image is ~480 MB (google-api-python-client, pytest);
+   the Gemini free tier may use submitted content to improve Google's
+   products, which matters once friends' email goes through it.
 
 ---
 

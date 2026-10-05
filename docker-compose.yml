@@ -1,5 +1,6 @@
 # =============================================================================
-# JobTracker — Docker Compose (Development)
+# JobTracker — Docker Compose (local development)
+# Production: infra/deploy/docker-compose.yml
 # =============================================================================
 # Usage:
 #   docker compose up -d          Start all services
@@ -86,25 +87,6 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
-    networks:
-      - jobtracker-net
-
-  # ---------------------------------------------------------------------------
-  # Public webhook gateway (optional; started with --profile tunnel)
-  # ---------------------------------------------------------------------------
-  # Point a tunnel at :8080 rather than at the backend directly. See
-  # infra/nginx/webhook-gateway.conf for why.
-  webhook-gateway:
-    image: nginx:1.27-alpine
-    container_name: jobtracker-webhook-gateway
-    profiles: ["tunnel"]
-    restart: unless-stopped
-    depends_on:
-      - backend
-    volumes:
-      - ./infra/nginx/webhook-gateway.conf:/etc/nginx/conf.d/default.conf:ro
-    ports:
-      - "127.0.0.1:8080:80"
     networks:
       - jobtracker-net
 

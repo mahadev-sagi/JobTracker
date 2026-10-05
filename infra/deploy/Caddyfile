@@ -1,0 +1,48 @@
+# JobTracker public entry point.
+#
+# Caddy obtains and renews the HTTPS certificate for {$DOMAIN} by itself
+# (Let's Encrypt, HTTP challenge on port 80), redirects HTTP to HTTPS, serves
+# the compiled frontend, and proxies /api to the backend. The backend's own
+# port is never published, so /docs and anything else outside /api is not
+# reachable from the internet.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	handle /api/* {
+		# Nothing legitimate posts more than a pasted email.
+		request_body {
+			max_size 1MB
+		}
+		# No response timeout: a Gmail push for a large batch can take minutes,
+		# and Pub/Sub itself gives up after its 600 s acknowledgement deadline.
+		reverse_proxy backend:8000
+	}
+
+	handle /health {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		root * /srv
+		# Client-side routes (/queue, /settings) all load the single page.
+		try_files {path} /index.html
+		file_server
+	}
+
+	# Vite fingerprints asset filenames, so they can be cached forever.
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+}

@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# JobTracker frontend — Vite dev server.
+# JobTracker frontend — Vite dev server, and the production web image.
 #
 # docker-compose bind-mounts ./frontend over /app and keeps node_modules in an
 # anonymous volume, so this image only needs the toolchain plus a warm
@@ -24,7 +24,12 @@ CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
 FROM development AS build
 RUN npm run build
 
-FROM nginx:stable-alpine AS production
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
-EXPOSE 5173
+# -----------------------------------------------------------------------------
+# Production: Caddy serves the compiled app, terminates HTTPS (certificates are
+# obtained and renewed automatically) and proxies /api to the backend. Its
+# configuration is mounted from infra/deploy/Caddyfile, so it can change
+# without rebuilding this image.
+# -----------------------------------------------------------------------------
+FROM caddy:2-alpine AS web
+COPY --from=build /app/dist /srv
+EXPOSE 80 443
