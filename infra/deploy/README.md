@@ -19,21 +19,31 @@ GitHub needs no access to the server.
 
 ## 1. Launch the server (AWS EC2)
 
-1. **Billing safety first:** Billing and Cost Management → Budgets → create a
-   *zero spend* or $1 budget with an email alert.
-2. EC2 → **Launch instance**:
+1. **Stay on the free plan.** When creating the account, choose the
+   **Free plan**, not the paid plan. Since mid-2025, new AWS accounts get
+   sign-up credits (about $100–200, valid for 6 months) and a free-plan
+   account is never charged beyond them. Usage just draws down the credits.
+   When the credits or the 6 months run out, AWS asks you to upgrade; until
+   you do, nothing is billed (and the account is eventually closed). Check
+   the current terms on the sign-up page; they change.
+   Accounts created before July 2025 have the older 12-month free tier
+   instead, which covers one `t2.micro`/`t3.micro` and 30 GB of disk.
+2. **Billing safety anyway:** Billing and Cost Management → Budgets → create
+   a *zero spend* budget with an email alert. Billing → Credits shows what is
+   left.
+3. EC2 → **Launch instance**:
    - **Name:** `jobtracker`
    - **Image:** Ubuntu Server 24.04 LTS, 64-bit (x86)
-   - **Instance type:** `t3.micro` (or whichever type the console labels
-     *Free tier eligible*; the images are built for x86 only)
+   - **Instance type:** `t3.micro`, or whichever type the console marks
+     *Free tier eligible* (x86 only; the images are not built for ARM)
    - **Key pair:** create one and save the `.pem` file somewhere safe
    - **Network:** allow SSH **from My IP only**, allow HTTPS and HTTP from the
      internet (HTTP is needed for certificate issuance and the redirect)
-   - **Storage:** 20 GiB gp3
-3. Note the instance's **public IPv4 address**.
+   - **Storage:** 20 GiB gp3 (stay at or under 30 GiB)
+4. Note the instance's **public IPv4 address**.
 
-Rough on-demand cost without credits: instance about $7.50, public IPv4
-$3.60, 20 GiB disk $1.60, so about $13 a month.
+What it uses: instance about $7.50, public IPv4 $3.60 and 20 GiB disk
+$1.60, so about $13 a month of credits, or roughly $80 over the 6 months.
 
 ## 2. Set up the server
 
