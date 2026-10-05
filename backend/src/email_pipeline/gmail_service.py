@@ -1,9 +1,9 @@
 """
 Gmail API integration service.
 
-Provides async helpers to authenticate with the Gmail API, fetch new
-messages via history-based sync, read message content, and set up
-push notifications via Google Cloud Pub/Sub.
+One instance per connected mailbox, built from that user's stored refresh
+token. Provides history-based incremental sync, a date-based fallback for
+when Gmail has discarded the history, message reading, and watch management.
 """
 
 from __future__ import annotations
@@ -11,28 +11,34 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-import os
 import re
 from email.utils import parseaddr
 from html import unescape
 from typing import Any
 
-from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from src.core.config import get_settings
+from src.core.google_oauth import GMAIL_SCOPE, TOKEN_URL
 
 logger = logging.getLogger(__name__)
 
 
 class GmailAuthError(RuntimeError):
-    """Raised when Gmail credentials are missing, invalid or unrefreshable."""
+    """The user's grant is revoked or expired; they must reconnect Gmail."""
 
-_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.modify",
-]
+
+class HistoryExpiredError(RuntimeError):
+    """Gmail no longer has history from the requested start id.
+
+    Gmail keeps history for roughly a week. A mailbox that has not synced for
+    longer (server down, watch lapsed) gets a 404 from history.list and must
+    be recovered another way.
+    """
+
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\n{3,}")
@@ -48,135 +54,103 @@ def _strip_html(html: str) -> str:
 
 class GmailService:
     """
-    Thin async-friendly wrapper around the synchronous
-    ``googleapiclient`` Gmail resource.
+    Async wrapper around the blocking ``googleapiclient`` Gmail resource.
 
-    All public methods are ``async`` so callers can use
-    ``asyncio.to_thread`` internally if needed; currently the
-    underlying client is blocking so each call is executed in the
-    default thread-pool via ``asyncio.to_thread``.
+    Every call runs in the default thread pool via ``asyncio.to_thread``.
+    Access tokens are refreshed by google-auth on demand; a refresh that
+    fails because the user revoked access surfaces as ``GmailAuthError``.
     """
 
-    def __init__(self, credentials_path: str | None = None) -> None:
-        """
-        Build and authenticate the Gmail API client.
-
-        Parameters
-        ----------
-        credentials_path:
-            Path to a previously authorised ``token.json``. Defaults to
-            ``settings.GOOGLE_CREDENTIALS_JSON``.
-        """
+    def __init__(self, refresh_token: str) -> None:
         settings = get_settings()
-        self._credentials_path = credentials_path or settings.GOOGLE_CREDENTIALS_JSON
-        if not self._credentials_path:
-            raise GmailAuthError(
-                "No Gmail credentials configured. Set GOOGLE_CREDENTIALS_JSON "
-                "to the path of an authorised token.json."
-            )
-        self._creds: Credentials | None = None
-        self._service: Any = None
-        self._authenticate()
-
-    # ── Private helpers ──────────────────────────────────────────────
-
-    def _authenticate(self) -> None:
-        """Load and refresh stored OAuth credentials.
-
-        Deliberately never starts an interactive consent flow. The server runs
-        headless in Docker and Lambda, where ``run_local_server`` would block
-        forever on a browser that cannot open. Minting the token is a one-time
-        operation performed out of band by
-        ``backend/scripts/bootstrap_gmail_token.py``.
-        """
-        token_path = self._credentials_path
-
-        if not os.path.exists(token_path):
-            raise GmailAuthError(
-                f"Gmail token not found at '{token_path}'. Run "
-                "`python backend/scripts/bootstrap_gmail_token.py` once on a "
-                "machine with a browser, then mount the resulting token.json."
-            )
-
-        try:
-            self._creds = Credentials.from_authorized_user_file(token_path, _SCOPES)
-        except ValueError as exc:
-            raise GmailAuthError(
-                f"'{token_path}' is not a valid authorised-user token file. "
-                "It should be the token.json produced by the bootstrap "
-                "script, not the OAuth client credentials.json."
-            ) from exc
-
-        if not self._creds.valid:
-            if self._creds.expired and self._creds.refresh_token:
-                logger.info("Gmail credentials expired — refreshing.")
-                self._creds.refresh(Request())
-                # Persist the rotated access token so a restart does not need
-                # to refresh again. Best-effort: the path may be mounted
-                # read-only, which is not fatal.
-                try:
-                    with open(token_path, "w") as f:
-                        f.write(self._creds.to_json())
-                except OSError:
-                    logger.warning(
-                        "Could not write refreshed token back to %s", token_path
-                    )
-            else:
-                raise GmailAuthError(
-                    "Stored Gmail credentials are invalid and cannot be "
-                    "refreshed (no refresh_token). Re-run the bootstrap script."
-                )
-
-        self._service = build("gmail", "v1", credentials=self._creds)
+        creds = Credentials(
+            token=None,
+            refresh_token=refresh_token,
+            token_uri=TOKEN_URL,
+            client_id=settings.GOOGLE_OAUTH_CLIENT_ID,
+            client_secret=settings.GOOGLE_OAUTH_CLIENT_SECRET,
+            scopes=[GMAIL_SCOPE],
+        )
+        # cache_discovery=False: the file cache it would use is unavailable
+        # and only produces a warning per build.
+        self._service = build("gmail", "v1", credentials=creds, cache_discovery=False)
 
     def _users(self) -> Any:
-        """Shortcut for ``service.users()``."""
         return self._service.users()
 
-    # ── Public API ───────────────────────────────────────────────────
+    async def _run(self, fn):
+        try:
+            return await asyncio.to_thread(fn)
+        except RefreshError as exc:
+            raise GmailAuthError(str(exc)) from exc
 
-    async def get_new_messages(self, history_id: str) -> list[dict]:
+    # ── Sync ─────────────────────────────────────────────────────────
+
+    async def get_new_messages(self, history_id: str) -> tuple[list[dict], str]:
         """
-        Fetch message stubs added since *history_id*.
+        Fetch inbox message stubs added since *history_id*.
 
-        Returns a list of dicts each containing at least an ``"id"`` key.
-        Returns an empty list when no new history is available (e.g.
-        when ``historyId`` is already up-to-date).
+        Returns ``(stubs, latest_history_id)``, where the latter is the
+        mailbox's history id as of this call — the correct value to resume
+        from next time, since every change up to it has now been seen.
         """
 
-        def _fetch() -> list[dict]:
+        def _fetch() -> tuple[list[dict], str]:
             results: list[dict] = []
+            latest = history_id
             request = self._users().history().list(
                 userId="me",
                 startHistoryId=history_id,
                 historyTypes=["messageAdded"],
+                # Without this, sent mail and drafts are classified too.
+                labelId="INBOX",
             )
             while request is not None:
-                response = request.execute()
+                try:
+                    response = request.execute()
+                except HttpError as exc:
+                    if exc.resp.status == 404:
+                        raise HistoryExpiredError(history_id) from exc
+                    raise
+                latest = str(response.get("historyId", latest))
                 for record in response.get("history", []):
                     for msg in record.get("messagesAdded", []):
                         results.append(msg["message"])
                 request = self._users().history().list_next(request, response)
+            return results, latest
+
+        return await self._run(_fetch)
+
+    async def get_messages_after(self, epoch_seconds: int) -> list[dict]:
+        """Inbox message stubs received after a Unix time, oldest first.
+
+        Recovery path for ``HistoryExpiredError``.
+        """
+
+        def _fetch() -> list[dict]:
+            results: list[dict] = []
+            request = self._users().messages().list(
+                userId="me", q=f"after:{epoch_seconds}", labelIds=["INBOX"]
+            )
+            while request is not None:
+                response = request.execute()
+                results.extend(response.get("messages", []))
+                request = self._users().messages().list_next(request, response)
+            # messages.list is newest first; process in arrival order so a
+            # later status overrides an earlier one.
+            results.reverse()
             return results
 
-        try:
-            return await asyncio.to_thread(_fetch)
-        except Exception:
-            logger.exception("Failed to fetch history since %s", history_id)
-            raise
+        return await self._run(_fetch)
 
-    async def get_message_content(
-        self,
-        message_id: str,
-    ) -> tuple[str, str, str]:
-        """
-        Retrieve the subject, plain-text body, and sender of a message.
+    async def get_current_history_id(self) -> str:
+        def _fetch() -> str:
+            return str(self._users().getProfile(userId="me").execute()["historyId"])
 
-        Returns
-        -------
-        tuple[str, str, str]
-            ``(subject, body, sender)``
-        """
+        return await self._run(_fetch)
+
+    async def get_message_content(self, message_id: str) -> tuple[str, str, str]:
+        """Return ``(subject, body, sender)`` for a message."""
 
         def _fetch() -> tuple[str, str, str]:
             msg = (
@@ -185,7 +159,6 @@ class GmailService:
                 .get(userId="me", id=message_id, format="full")
                 .execute()
             )
-
             headers = {
                 h["name"].lower(): h["value"]
                 for h in msg.get("payload", {}).get("headers", [])
@@ -194,42 +167,28 @@ class GmailService:
             sender = headers.get("from", "")
             _, sender_email = parseaddr(sender)
             sender_display = sender if sender_email else sender
-
             body = self._extract_body(msg.get("payload", {}))
             return subject, body, sender_display
 
-        return await asyncio.to_thread(_fetch)
+        return await self._run(_fetch)
+
+    # ── Watch ────────────────────────────────────────────────────────
 
     async def setup_watch(self, topic_name: str) -> dict:
-        """
-        Register a Gmail push-notification watch on the user's inbox.
+        """Register (or renew) push notifications for the inbox.
 
-        Parameters
-        ----------
-        topic_name:
-            Fully-qualified Cloud Pub/Sub topic, e.g.
-            ``projects/my-project/topics/gmail-push``.
-
-        Returns
-        -------
-        dict
-            The watch response containing ``historyId`` and ``expiration``.
+        Returns the watch response, containing ``historyId`` and
+        ``expiration`` (epoch milliseconds).
         """
 
         def _watch() -> dict:
-            body = {
-                "topicName": topic_name,
-                "labelIds": ["INBOX"],
-            }
+            body = {"topicName": topic_name, "labelIds": ["INBOX"]}
             return self._users().watch(userId="me", body=body).execute()
 
-        result = await asyncio.to_thread(_watch)
-        logger.info(
-            "Gmail watch registered — historyId=%s, expiration=%s",
-            result.get("historyId"),
-            result.get("expiration"),
-        )
-        return result
+        return await self._run(_watch)
+
+    async def stop_watch(self) -> None:
+        await self._run(lambda: self._users().stop(userId="me").execute())
 
     # ── Body extraction ──────────────────────────────────────────────
 
@@ -255,13 +214,12 @@ class GmailService:
             mime = part.get("mimeType", "")
             data = part.get("body", {}).get("data", "")
             if not data:
-                # Recurse into nested multipart
-                nested = GmailService._extract_body(part)
-                if nested:
-                    if mime == "text/plain" and plain is None:
-                        plain = nested
-                    elif "html" in mime and html is None:
-                        html = nested
+                # A nested multipart (typically multipart/alternative inside
+                # multipart/mixed) already resolved its own best text. Its
+                # mime type is never text/*, so keying on that, as this once
+                # did, discarded the body of most real-world email.
+                if part.get("parts") and plain is None:
+                    plain = GmailService._extract_body(part) or None
                 continue
 
             decoded = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
@@ -275,29 +233,3 @@ class GmailService:
         if html:
             return _strip_html(html)
         return ""
-
-
-# ---------------------------------------------------------------------------
-# Module-level accessor
-# ---------------------------------------------------------------------------
-
-_service_singleton: GmailService | None = None
-
-
-def get_gmail_service() -> GmailService:
-    """Return a lazily built, process-wide ``GmailService``.
-
-    Authentication reads a token from disk and builds an HTTP client, so
-    constructing one per inbound webhook would be wasteful. The instance
-    refreshes its own credentials as they expire.
-    """
-    global _service_singleton  # noqa: PLW0603
-    if _service_singleton is None:
-        _service_singleton = GmailService()
-    return _service_singleton
-
-
-def reset_gmail_service() -> None:
-    """Drop the cached instance. Used by tests and after a token rotation."""
-    global _service_singleton  # noqa: PLW0603
-    _service_singleton = None

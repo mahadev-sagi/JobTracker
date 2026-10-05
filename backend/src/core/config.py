@@ -43,11 +43,17 @@ class Settings(BaseSettings):
     # ── Google Cloud / Pub-Sub ──────────────────────────────────────────
     GOOGLE_CLOUD_PROJECT_ID: str = ""
     GOOGLE_PUBSUB_TOPIC: str = "gmail-notifications"
-    GOOGLE_PUBSUB_SUBSCRIPTION: str = "gmail-notifications-sub"
 
-    # ── Gmail ───────────────────────────────────────────────────────────
-    GMAIL_USER_EMAIL: str = ""
-    GOOGLE_CREDENTIALS_JSON: str = ""
+    # ── Google OAuth (sign-in and Gmail access) ─────────────────────────
+    # A "Web application" OAuth client. Register two redirect URIs on it:
+    # {PUBLIC_URL}/api/auth/callback and {PUBLIC_URL}/api/gmail/callback.
+    GOOGLE_OAUTH_CLIENT_ID: str = ""
+    GOOGLE_OAUTH_CLIENT_SECRET: str = ""
+
+    # Fernet key encrypting stored Gmail refresh tokens. Generate with:
+    # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Changing it makes every stored token unreadable; users must reconnect.
+    TOKEN_ENCRYPTION_KEY: str = ""
 
     # ── Pub/Sub push authentication ─────────────────────────────────────
     # Preferred: configure the push subscription with an OIDC token and set
@@ -60,10 +66,27 @@ class Settings(BaseSettings):
     # token. Ignored when PUBSUB_AUDIENCE is set.
     PUBSUB_VERIFICATION_TOKEN: str = ""
 
+    # ── Access control ──────────────────────────────────────────────────
+    # Comma-separated. Only these addresses (plus admins) may sign in. Empty
+    # admits anyone in development and no one in production.
+    ALLOWED_EMAILS: str = ""
+    # Comma-separated. Admins may trigger the scraper and are always allowed.
+    ADMIN_EMAILS: str = ""
+    SESSION_TTL_DAYS: int = 30
+    # Development only: exposes /api/auth/dev-login so the app can be used
+    # without a Google OAuth client. Ignored in production.
+    DEV_LOGIN_ENABLED: bool = False
+
+    # ── Background jobs ─────────────────────────────────────────────────
+    SCHEDULER_ENABLED: bool = True
+    # 0 disables scheduled scraping; an admin can still run it by hand.
+    SCRAPER_INTERVAL_HOURS: int = 24
+
     # ── URLs ────────────────────────────────────────────────────────────
     LISTINGS_URL: str = ""
-    BACKEND_URL: str = "http://localhost:8000"
-    FRONTEND_URL: str = "http://localhost:3000"
+    # Where users reach the app, without a trailing slash. OAuth redirect URIs
+    # are built from it, and an https:// value marks cookies Secure.
+    PUBLIC_URL: str = "http://localhost:5173"
 
     # ── Runtime ─────────────────────────────────────────────────────────
     ENVIRONMENT: str = "development"
@@ -90,13 +113,39 @@ class Settings(BaseSettings):
         return self.LLM_BASE_URL or None
 
     @property
-    def cors_origins(self) -> list[str]:
-        """Return the list of allowed CORS origins."""
-        origins = [self.FRONTEND_URL]
-        if not self.is_production:
-            origins.append("http://localhost:3000")
-        # Deduplicate while preserving order
-        return list(dict.fromkeys(origins))
+    def public_url(self) -> str:
+        return self.PUBLIC_URL.rstrip("/")
+
+    @property
+    def secure_cookies(self) -> bool:
+        return self.public_url.startswith("https://")
+
+    @property
+    def pubsub_topic(self) -> str | None:
+        """Fully qualified topic Gmail publishes to, or None if unconfigured."""
+        if not self.GOOGLE_CLOUD_PROJECT_ID or not self.GOOGLE_PUBSUB_TOPIC:
+            return None
+        return f"projects/{self.GOOGLE_CLOUD_PROJECT_ID}/topics/{self.GOOGLE_PUBSUB_TOPIC}"
+
+    @property
+    def admin_emails(self) -> set[str]:
+        return _email_set(self.ADMIN_EMAILS)
+
+    def may_sign_in(self, email: str) -> bool:
+        allowed = _email_set(self.ALLOWED_EMAILS) | self.admin_emails
+        if not allowed:
+            # Gmail access makes an open sign-up a liability, so production
+            # never defaults to it.
+            return not self.is_production
+        return email.lower() in allowed
+
+    @property
+    def dev_login_enabled(self) -> bool:
+        return self.DEV_LOGIN_ENABLED and not self.is_production
+
+
+def _email_set(raw: str) -> set[str]:
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
 
 
 @lru_cache(maxsize=1)

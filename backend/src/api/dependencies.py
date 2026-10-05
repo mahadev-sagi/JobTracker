@@ -9,13 +9,16 @@ from __future__ import annotations
 import hmac
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from uuid import UUID
 
 import asyncpg
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Cookie, Depends, Header, HTTPException, status
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 
 from src.core.config import Settings, get_settings
+from src.core.security import hash_token
 from src.db.database import get_pool
 
 logger = logging.getLogger(__name__)
@@ -37,6 +40,56 @@ async def get_db() -> AsyncIterator[asyncpg.Connection]:
         yield conn
     finally:
         await pool.release(conn)
+
+
+# ── Signed-in user ──────────────────────────────────────────────────────
+SESSION_COOKIE = "jt_session"
+
+
+@dataclass(frozen=True)
+class CurrentUser:
+    id: UUID
+    email: str
+    name: str | None
+    picture_url: str | None
+    is_admin: bool
+
+
+async def get_current_user(
+    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    conn: asyncpg.Connection = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CurrentUser:
+    """Resolve the session cookie to a user, or fail with 401."""
+    if not session_token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not signed in.")
+    row = await conn.fetchrow(
+        """
+        SELECT u.id, u.email, u.name, u.picture_url
+        FROM sessions s JOIN users u ON u.id = s.user_id
+        WHERE s.token_hash = $1 AND s.expires_at > NOW()
+        """,
+        hash_token(session_token),
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired.")
+    # Re-checked on every request so removing someone from ALLOWED_EMAILS
+    # takes effect immediately, not when their session lapses.
+    if not settings.may_sign_in(row["email"]):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Access has been withdrawn.")
+    return CurrentUser(
+        id=row["id"],
+        email=row["email"],
+        name=row["name"],
+        picture_url=row["picture_url"],
+        is_admin=row["email"].lower() in settings.admin_emails,
+    )
+
+
+async def require_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admins only.")
+    return user
 
 
 # ── Pub/Sub push-endpoint auth dependency ───────────────────────────────

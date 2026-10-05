@@ -26,6 +26,7 @@ COPY --from=builder /install /usr/local
 
 # Copy application source code
 COPY src/ ./src/
+COPY scripts/ ./scripts/
 
 # Create a non-root user for security
 RUN groupadd --gid 1001 appuser && \

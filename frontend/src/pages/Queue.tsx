@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import QueueFilters from '../components/queue/QueueFilters';
 import QueueTable from '../components/queue/QueueTable';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import { useToast } from '../components/common/Toast';
-import { useApplications } from '../hooks/useApplications';
-import { ApplicationStatus } from '../types';
+import { useAuth } from '../auth/AuthContext';
+import { Listing, ScraperRun } from '../types';
 import * as api from '../services/api';
 import { Play, ChevronLeft, ChevronRight } from 'lucide-react';
 
@@ -12,10 +12,16 @@ const PAGE_SIZE = 50;
 
 const Queue = () => {
   const { notify } = useToast();
+  const { user } = useAuth();
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
+  const [listings, setListings] = useState<Listing[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [isScraping, setIsScraping] = useState(false);
+  const [lastRun, setLastRun] = useState<ScraperRun | null>(null);
 
   // Debounce so a search hits the API once the user stops typing, rather
   // than on every keystroke.
@@ -27,26 +33,48 @@ const Queue = () => {
     return () => clearTimeout(timer);
   }, [searchInput]);
 
-  // Filtering and paging run on the server. Previously this fetched an
-  // unfiltered first page and filtered it in the browser, so it could only
-  // ever surface whatever UNAPPLIED rows happened to fall in the newest 50.
-  const { applications, total, loading, error, updateStatus, refetch } = useApplications({
-    status: ApplicationStatus.UNAPPLIED,
-    search: search || undefined,
-    // date_posted is not an allowed sort column on the API; created_at is the
-    // closest proxy for "newest listings first".
-    sort_by: 'created_at',
-    order: 'desc',
-    limit: PAGE_SIZE,
-    offset: page * PAGE_SIZE,
-  });
+  // The shared job board minus whatever this user has already applied to.
+  // Filtering and paging run on the server; the board holds tens of
+  // thousands of listings.
+  const load = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const result = await api.getListings({
+        search: search || undefined,
+        sort_by: 'created_at',
+        order: 'desc',
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      });
+      setListings(result.items);
+      setTotal(result.total);
+    } catch (err) {
+      setError(api.errorMessage(err, 'Failed to load listings'));
+    } finally {
+      setLoading(false);
+    }
+  }, [search, page]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useEffect(() => {
+    api.getScraperStatus().then(setLastRun).catch(() => setLastRun(null));
+  }, []);
 
   const handleMarkApplied = async (id: string) => {
+    const previous = listings;
+    setListings((rows) => rows.filter((row) => row.id !== id));
+    setTotal((t) => Math.max(0, t - 1));
     try {
-      await updateStatus(id, ApplicationStatus.APPLIED);
-      notify('Marked as applied.', 'success');
+      await api.applyToListing(id);
+      notify('Added to your applications.', 'success');
     } catch (err) {
-      notify(err instanceof Error ? err.message : 'Failed to update status.');
+      setListings(previous);
+      setTotal((t) => t + 1);
+      notify(api.errorMessage(err, 'Failed to mark as applied.'));
     }
   };
 
@@ -57,7 +85,10 @@ const Queue = () => {
       notify('Scraper started. New listings will appear shortly.', 'success');
       // The run is asynchronous on the backend; give it a moment before
       // reloading so the first batch of inserts is visible.
-      setTimeout(refetch, 4000);
+      setTimeout(() => {
+        load();
+        api.getScraperStatus().then(setLastRun).catch(() => undefined);
+      }, 4000);
     } catch (err) {
       notify(api.errorMessage(err, 'Failed to run the scraper.'));
     } finally {
@@ -67,7 +98,8 @@ const Queue = () => {
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const firstShown = total === 0 ? 0 : page * PAGE_SIZE + 1;
-  const lastShown = Math.min(total, page * PAGE_SIZE + applications.length);
+  const lastShown = Math.min(total, page * PAGE_SIZE + listings.length);
+  const lastUpdated = lastRun?.status === 'completed' ? lastRun.finished_at : null;
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -77,27 +109,32 @@ const Queue = () => {
             Opportunity Queue
           </h1>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Review and apply to new job opportunities
+            Open roles you haven't applied to yet
+            {lastUpdated && ` · listings updated ${new Date(lastUpdated).toLocaleString()}`}
           </p>
         </div>
 
-        <button
-          onClick={handleRunScraper}
-          disabled={isScraping}
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {isScraping ? (
-            <>
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
-              Scraping...
-            </>
-          ) : (
-            <>
-              <Play className="w-4 h-4 mr-2" />
-              Run Scraper
-            </>
-          )}
-        </button>
+        {/* Listings are shared, and refresh daily on their own; only an
+            admin can force a run. */}
+        {user?.is_admin && (
+          <button
+            onClick={handleRunScraper}
+            disabled={isScraping}
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {isScraping ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                Scraping...
+              </>
+            ) : (
+              <>
+                <Play className="w-4 h-4 mr-2" />
+                Run Scraper
+              </>
+            )}
+          </button>
+        )}
       </div>
 
       <QueueFilters searchTerm={searchInput} onSearchChange={setSearchInput} />
@@ -116,10 +153,10 @@ const Queue = () => {
             : `Showing ${firstShown}–${lastShown} of ${total.toLocaleString()} opportunities`}
       </div>
 
-      {loading && applications.length === 0 ? (
+      {loading && listings.length === 0 ? (
         <LoadingSpinner />
       ) : (
-        <QueueTable applications={applications} onMarkApplied={handleMarkApplied} />
+        <QueueTable listings={listings} onMarkApplied={handleMarkApplied} />
       )}
 
       {totalPages > 1 && (

@@ -10,6 +10,21 @@ jobs:
   backend-test:
     name: Backend Lint & Test
     runs-on: ubuntu-latest
+    services:
+      # The API and email-processing tests run against a real database.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: jobtracker_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -28,11 +43,11 @@ jobs:
 
       - name: Lint with Ruff
         run: |
-          ruff check backend/src backend/tests
+          ruff check backend/src backend/tests backend/scripts
 
       - name: Run Backend Tests
         env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/jobtracker_test
+          TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/jobtracker_test
           OPENAI_API_KEY: mock-key-for-tests
         run: |
           pytest backend/tests/ -v

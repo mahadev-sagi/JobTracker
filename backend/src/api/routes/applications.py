@@ -11,16 +11,18 @@ import logging
 from uuid import UUID
 
 from asyncpg import Connection
-from asyncpg.exceptions import UniqueViolationError
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
-from src.api.dependencies import get_db
+from src.api.dependencies import CurrentUser, get_current_user, get_db
 from src.core.state_machine import ApplicationStatus, can_transition, transition
 from src.db.models import ApplicationCreate, ApplicationResponse, ApplicationUpdate
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/applications", tags=["Applications"])
+
+# Every query below is scoped to the signed-in user. A route that forgets the
+# user_id predicate leaks one person's applications to everyone.
 
 
 # ---------------------------------------------------------------------------
@@ -29,16 +31,20 @@ router = APIRouter(prefix="/api/applications", tags=["Applications"])
 # ---------------------------------------------------------------------------
 
 @router.get("/stats/summary")
-async def get_stats_summary(conn: Connection = Depends(get_db)):
+async def get_stats_summary(
+    user: CurrentUser = Depends(get_current_user),
+    conn: Connection = Depends(get_db),
+):
     """Return application counts grouped by status for the dashboard."""
     rows = await conn.fetch(
         """
         SELECT status, COUNT(*)::int AS count
         FROM applications
-        WHERE deleted_at IS NULL
+        WHERE user_id = $1 AND deleted_at IS NULL
         GROUP BY status
         ORDER BY status
-        """
+        """,
+        user.id,
     )
     # Build a dict that always includes every valid status (zero-filled).
     summary: dict[str, int] = {s.value: 0 for s in ApplicationStatus}
@@ -93,6 +99,7 @@ async def list_applications(
     ),
     limit: int = Query(50, ge=1, le=200, description="Page size."),
     offset: int = Query(0, ge=0, description="Number of rows to skip."),
+    user: CurrentUser = Depends(get_current_user),
     conn: Connection = Depends(get_db),
 ):
     """List applications with optional filtering, searching, sorting, and pagination."""
@@ -110,9 +117,9 @@ async def list_applications(
         )
 
     # -- Build query dynamically --------------------------------------------
-    conditions: list[str] = ["deleted_at IS NULL"]
-    params: list[object] = []
-    idx = 1  # asyncpg uses $1, $2, … placeholders
+    conditions: list[str] = ["user_id = $1", "deleted_at IS NULL"]
+    params: list[object] = [user.id]
+    idx = 2  # asyncpg uses $1, $2, … placeholders
 
     if status_filter:
         # Validate every requested status before building the query.
@@ -141,8 +148,7 @@ async def list_applications(
     where_clause = " AND ".join(conditions)
 
     # Total matching rows, before paging. Returned as a header so the body
-    # stays a plain list; the UI needs it to page through the backlog, which
-    # runs to tens of thousands of scraped listings.
+    # stays a plain list.
     total = await conn.fetchval(
         f"SELECT COUNT(*) FROM applications WHERE {where_clause}", *params
     )
@@ -169,12 +175,14 @@ async def list_applications(
 @router.get("/{app_id}", response_model=ApplicationResponse)
 async def get_application(
     app_id: UUID,
+    user: CurrentUser = Depends(get_current_user),
     conn: Connection = Depends(get_db),
 ):
     """Retrieve a single application by its UUID."""
     row = await conn.fetchrow(
-        "SELECT * FROM applications WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT * FROM applications WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
         app_id,
+        user.id,
     )
     if row is None:
         raise HTTPException(
@@ -195,6 +203,7 @@ async def get_application(
 )
 async def create_application(
     payload: ApplicationCreate,
+    user: CurrentUser = Depends(get_current_user),
     conn: Connection = Depends(get_db),
 ):
     """Create a new job application record."""
@@ -202,34 +211,23 @@ async def create_application(
     # so an invalid value is rejected as a 422 before reaching this point.
     initial_status = payload.status.value
 
-    try:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO applications
-                (company, role, location, url, date_posted, source, status, notes)
-            VALUES ($1, $2, $3, $4, $5, $6, $7::application_status, $8)
-            RETURNING *
-            """,
-            payload.company,
-            payload.role,
-            payload.location,
-            payload.url,
-            payload.date_posted,
-            payload.source,
-            initial_status,
-            payload.notes,
-        )
-    except UniqueViolationError as exc:
-        # The schema dedupes on listing URL, falling back to
-        # company + role + location. Both are surfaced as a conflict rather
-        # than a 500 so the caller can tell a duplicate from a real failure.
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"An application for '{payload.role}' at '{payload.company}' "
-                "already exists."
-            ),
-        ) from exc
+    row = await conn.fetchrow(
+        """
+        INSERT INTO applications
+            (user_id, company, role, location, url, date_posted, source, status, notes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::application_status, $9)
+        RETURNING *
+        """,
+        user.id,
+        payload.company,
+        payload.role,
+        payload.location,
+        payload.url,
+        payload.date_posted,
+        payload.source or "manual",
+        initial_status,
+        payload.notes,
+    )
     logger.info("Created application %s for %s at %s", row["id"], payload.role, payload.company)
     return dict(row)
 
@@ -242,6 +240,7 @@ async def create_application(
 async def update_application(
     app_id: UUID,
     payload: ApplicationUpdate,
+    user: CurrentUser = Depends(get_current_user),
     conn: Connection = Depends(get_db),
 ):
     """
@@ -252,8 +251,9 @@ async def update_application(
     """
     # Fetch current record.
     existing = await conn.fetchrow(
-        "SELECT * FROM applications WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT * FROM applications WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
         app_id,
+        user.id,
     )
     if existing is None:
         raise HTTPException(
@@ -262,7 +262,10 @@ async def update_application(
         )
 
     # Determine fields to update.
-    update_data = payload.dict(exclude_unset=True)
+    update_data = payload.model_dump(exclude_unset=True)
+    # An explicit null status means "leave it"; the column is NOT NULL.
+    if update_data.get("status", ...) is None:
+        del update_data["status"]
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -298,10 +301,14 @@ async def update_application(
     set_parts.append("updated_at = NOW()")
 
     set_clause = ", ".join(set_parts)
-    params.append(app_id)
+    params.extend([app_id, user.id])
 
     row = await conn.fetchrow(
-        f"UPDATE applications SET {set_clause} WHERE id = ${idx} AND deleted_at IS NULL RETURNING *",
+        f"""
+        UPDATE applications SET {set_clause}
+        WHERE id = ${idx} AND user_id = ${idx + 1} AND deleted_at IS NULL
+        RETURNING *
+        """,
         *params,
     )
     if row is None:
@@ -322,6 +329,7 @@ async def update_application(
 async def delete_application(
     app_id: UUID,
     hard: bool = Query(False, description="Permanently delete the record."),
+    user: CurrentUser = Depends(get_current_user),
     conn: Connection = Depends(get_db),
 ):
     """
@@ -332,12 +340,14 @@ async def delete_application(
     """
     if hard:
         result = await conn.execute(
-            "DELETE FROM applications WHERE id = $1", app_id
+            "DELETE FROM applications WHERE id = $1 AND user_id = $2", app_id, user.id
         )
     else:
         result = await conn.execute(
-            "UPDATE applications SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL",
+            "UPDATE applications SET deleted_at = NOW() "
+            "WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
             app_id,
+            user.id,
         )
 
     # asyncpg returns e.g. "DELETE 1" or "UPDATE 1"

@@ -29,8 +29,9 @@ services:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Applied automatically by the postgres entrypoint on a fresh volume.
-      - ./backend/src/db/migrations:/docker-entrypoint-initdb.d:ro
+      # Schema migrations are applied by the backend at startup
+      # (backend/src/db/migrate.py), not by the postgres entrypoint, which
+      # only ever ran them against a brand-new volume.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jobtracker} -d ${POSTGRES_DB:-jobtracker}"]
       interval: 10s
@@ -61,10 +62,6 @@ services:
     volumes:
       - ./backend:/app
       - /app/__pycache__
-      # Gmail token.json, produced by backend/scripts/bootstrap_gmail_token.py.
-      # Read-only: the app refreshes the token in memory and only tries to
-      # write it back opportunistically.
-      - ./backend/secrets:/app/secrets:ro
     networks:
       - jobtracker-net
 

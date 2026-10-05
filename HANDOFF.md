@@ -1,63 +1,61 @@
-# Current handoff - 2026-09-27
+# Current handoff - 2026-10-04 (branch `multi-user`)
 
-This section supersedes the historical notes below.
+This section supersedes everything below it.
 
-## Running deployment
+## Direction
 
-The local personal deployment is running at http://localhost:5173, using:
+The owner wants JobTracker hosted, usable from any computer, by invited
+friends (under 100), at zero cost. Decisions made:
 
-```powershell
-docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile tunnel up -d --build
-```
+- Hosting: a single small AWS EC2 instance running this Docker Compose stack
+  (Postgres in a container, not RDS), on student/free credits. The old AWS
+  Terraform/Lambda design in `infra/aws` is abandoned.
+- Domain: a free subdomain (DuckDNS), HTTPS via Caddy. Fallback: GitHub
+  Student Pack domain if Google rejects the DuckDNS redirect URI.
+- Access: Google sign-in, invite list in `ALLOWED_EMAILS`, Google OAuth app
+  left in **Testing** mode (100 test users) to avoid paid verification of the
+  restricted Gmail scope.
 
-- Compiled React app served by nginx; backend code baked into its image.
-- Existing database volume retained; API reports 15,160 active rows.
-- Ports 5173, 8000, 8080, and 5433 bound to 127.0.0.1 only.
-- Existing host cloudflared process targets http://localhost:8080.
-- Gateway permits only health and Gmail push; local checks confirmed 404 for
-  applications, docs, and watch registration, and 401 for anonymous push.
-- Public tunnel URL was not recovered or tested externally in this session.
-- Production override uses one backend worker because scraper run state is
-  still in memory. It resets on restart.
+## Done on this branch (not merged, not deployed)
 
-## Changes and validation
+- Multi-user schema (`003_multi_user.sql`): users, sessions, shared
+  `listings`, per-user `applications`, per-user `gmail_accounts` with
+  Fernet-encrypted refresh tokens, `processed_emails` with outcomes,
+  `scraper_runs`.
+- Migration runner applies migrations at startup (`src/db/migrate.py`);
+  the Postgres initdb mount and `setup_db.sh` are gone.
+- Google sign-in, server-side sessions, CSRF header guard, admin role,
+  dev sign-in for local use.
+- Per-user Gmail connect/disconnect via web OAuth; desktop bootstrap script
+  removed.
+- Email pipeline rewritten (`email_pipeline/processing.py`): per-mailbox
+  advisory lock, cursor never moves backwards, expired-history recovery by
+  date, revoked grants marked instead of retried forever, company names
+  normalised, company-only matching refuses to guess between several open
+  applications.
+- Fixed: nested multipart emails returned an empty body (most real mail).
+- In-process scheduler renews Gmail watches and scrapes daily.
+- Frontend: sign-in page, Settings (Gmail + email activity), per-user queue.
+- 93 backend tests pass, the API and pipeline ones against real Postgres. CI
+  now starts a Postgres service. Frontend lint/build pass.
+- Verified in a browser against a migrated copy of the real database: sign
+  in, board, queue, apply, sign out, second user isolation, uninvited user
+  refused. No real Google OAuth, Gmail or LLM call has been made.
 
-Removed silent router-import failure. Webhook authentication now fails closed
-in development too. Gmail history and classifier failures propagate; failed
-batches return 503 without advancing the cursor. Application updates and the
-processed-message marker share a transaction. This fixes several silent-loss
-paths, but does not establish complete delivery correctness (see below).
+The local Docker stack on this PC still runs the old `main` code against the
+unmigrated database. A pre-migration backup is in `backups/` (2026-10-04).
+The only non-scraped rows in that database are demo data.
 
-85 backend tests pass, including new HTTP authentication and retry tests.
-Backend Ruff, frontend ESLint, and production frontend build pass. Rebuilt
-Docker deployment is healthy; dashboard, proxied list/stats, and gateway
-restrictions were checked against the running stack. No live Gmail or LLM
-request was made. README now describes the actual application and deployment.
+## Next
 
-## Requires user input / unfinished
-
-Asked whether deployment should stay on this PC or move to an always-on cloud
-server; no answer yet. No cloud resources were provisioned.
-
-Gmail remains unconnected: GOOGLE_CLOUD_PROJECT_ID, GMAIL_USER_EMAIL, and
-GOOGLE_CREDENTIALS_JSON are empty; backend/secrets has no OAuth token. Asked
-whether the user has a project and a downloaded Desktop OAuth credentials
-file. README includes setup steps. Do not paste credentials into chat.
-
-Before declaring Gmail ready for ongoing use:
-- Configure authenticated OIDC push, Gmail OAuth, a stable tunnel, and daily
-  watch renewal; run an actual incoming-mail test with the user.
-- Serialize overlapping pushes and prevent older notifications from moving
-  the history cursor backwards. Current processing is synchronous and can
-  exceed push request deadlines for large batches.
-- Fix ambiguous company-only matching: current fallback can select the wrong
-  application when multiple roles exist. The old notes overstate this fix.
-- Handle expired Gmail history IDs with an explicit recovery procedure.
-
-Dashboard has no authentication; keep it local until an authenticated access
-layer is in place. AWS Terraform remains incomplete. Automated backups and
-persistent scraper run state are not configured. The PC and Docker must stay
-running for this deployment to be available.
+1. Owner: create the AWS account (billing alert at $1), claim a DuckDNS name,
+   confirm the Google Cloud project exists.
+2. Deployment files: Caddy reverse proxy (HTTPS), production compose for a
+   1 GB instance (prebuilt images, swap), backup cron, deploy from GitHub.
+   Decide what to do with the now-redundant `webhook-gateway` profile.
+3. Google setup per README with the real domain; then a live test with the
+   owner: sign in, connect Gmail, send a test rejection email.
+4. Merge `multi-user` into `main` once deployed and verified.
 
 ---
 

@@ -67,7 +67,6 @@ const AddApplicationDialog = ({ open, onClose, onCreated }: AddApplicationDialog
       });
       onCreated();
     } catch (err) {
-      // 409 means the schema's dedup constraint already holds this posting.
       notify(api.errorMessage(err, 'Could not create application.'));
     } finally {
       setSaving(false);

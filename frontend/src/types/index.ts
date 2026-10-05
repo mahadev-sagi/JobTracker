@@ -56,6 +56,8 @@ export const STATUS_LABELS: Record<ApplicationStatus, string> = {
  */
 export interface Application {
   id: string;
+  /** The shared listing this was applied from, if any. */
+  listing_id?: string | null;
   company: string;
   role: string;
   status: ApplicationStatus;
@@ -99,4 +101,62 @@ export interface Column {
 export interface Paged<T> {
   items: T[];
   total: number;
+}
+
+/** A shared, scraped job-board posting. */
+export interface Listing {
+  id: string;
+  company: string;
+  role: string;
+  location?: string | null;
+  url?: string | null;
+  date_posted?: string | null;
+  source?: string | null;
+  created_at: string;
+}
+
+export interface GmailConnection {
+  email_address: string;
+  /** 'active', or 'revoked' when Google access must be granted again. */
+  status: 'active' | 'revoked';
+  last_synced_at: string | null;
+  watch_expires_at: string | null;
+  last_error: string | null;
+}
+
+export interface CurrentUser {
+  id: string;
+  email: string;
+  name: string | null;
+  picture_url: string | null;
+  is_admin: boolean;
+  gmail: GmailConnection | null;
+  /** False until the server has a Google OAuth client and encryption key. */
+  gmail_available: boolean;
+}
+
+export interface AuthConfig {
+  google: boolean;
+  dev_login: boolean;
+}
+
+/** One email the pipeline acted on, from GET /api/gmail/activity. */
+export interface EmailActivity {
+  message_id: string;
+  outcome: 'updated' | 'unchanged' | 'created' | 'ambiguous';
+  event_type: string | null;
+  company: string | null;
+  subject: string | null;
+  processed_at: string;
+  application_id: string | null;
+  role: string | null;
+  status: ApplicationStatus | null;
+}
+
+export interface ScraperRun {
+  status: 'idle' | 'running' | 'completed' | 'failed';
+  started_at?: string;
+  finished_at?: string | null;
+  new_inserted?: number;
+  error?: string | null;
 }

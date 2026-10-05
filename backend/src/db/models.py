@@ -36,11 +36,10 @@ class ApplicationCreate(ApplicationBase):
     """Schema for creating a new application.
 
     Adds the two optional fields a caller may set at creation time on top of
-    the shared base. The scraper leaves both at their defaults; the dashboard
-    uses them when a row is entered by hand.
+    the shared base, for applications entered by hand.
     """
 
-    status: ApplicationStatus = ApplicationStatus.UNAPPLIED
+    status: ApplicationStatus = ApplicationStatus.APPLIED
     notes: str | None = None
 
 
@@ -51,7 +50,8 @@ class ApplicationInDB(ApplicationBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    status: ApplicationStatus = ApplicationStatus.UNAPPLIED
+    listing_id: UUID | None = None
+    status: ApplicationStatus = ApplicationStatus.APPLIED
     created_at: datetime
     updated_at: datetime
     notes: str | None = None
@@ -71,3 +71,9 @@ class ApplicationResponse(ApplicationInDB):
     """Public API response schema (currently identical to the DB record)."""
 
     pass
+
+
+# ── Shared job-board listing ────────────────────────────────────────────
+class ListingResponse(ApplicationBase):
+    id: UUID
+    created_at: datetime

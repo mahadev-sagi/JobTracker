@@ -2,7 +2,7 @@
 Scraper ingestion pipeline.
 
 Fetches job listings from the configured remote URL, parses them,
-and bulk-upserts into the PostgreSQL ``applications`` table using
+and bulk-upserts into the shared PostgreSQL ``listings`` table using
 INSERT … ON CONFLICT DO NOTHING via asyncpg.
 """
 
@@ -68,8 +68,8 @@ async def run_ingestion() -> dict[str, int]:
 
     # ── 3. Upsert ────────────────────────────────────────────────────
     upsert_sql = """
-        INSERT INTO applications (company, role, location, url, date_posted, source, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::application_status)
+        INSERT INTO listings (company, role, location, url, date_posted, source)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT DO NOTHING
     """
 
@@ -78,11 +78,6 @@ async def run_ingestion() -> dict[str, int]:
             async with conn.transaction():
                 for listing in listings:
                     try:
-                        status_val = (
-                            listing.status.value
-                            if hasattr(listing, "status") and listing.status
-                            else "UNAPPLIED"
-                        )
                         result = await conn.execute(
                             upsert_sql,
                             listing.company,
@@ -91,7 +86,6 @@ async def run_ingestion() -> dict[str, int]:
                             listing.url,
                             listing.date_posted,
                             listing.source,
-                            status_val,
                         )
                         # asyncpg returns 'INSERT 0 1' if inserted, 'INSERT 0 0' if conflict
                         if result.endswith("1"):

@@ -1,19 +1,19 @@
 import React from 'react';
-import { Application } from '../../types';
+import { Listing } from '../../types';
 import { ExternalLink, Check, Calendar } from 'lucide-react';
 
 interface QueueTableProps {
-  applications: Application[];
+  listings: Listing[];
   onMarkApplied: (id: string) => void;
 }
 
-const QueueTable: React.FC<QueueTableProps> = ({ applications, onMarkApplied }) => {
-  if (applications.length === 0) {
+const QueueTable: React.FC<QueueTableProps> = ({ listings, onMarkApplied }) => {
+  if (listings.length === 0) {
     return (
       <div className="bg-white dark:bg-zinc-900 rounded-xl border border-gray-200 dark:border-zinc-800 p-12 text-center">
         <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">No opportunities found</h3>
         <p className="mt-1 text-gray-500 dark:text-gray-400">
-          Try adjusting your search or run the scraper to find new jobs.
+          Try adjusting your search. New listings are added daily.
         </p>
       </div>
     );
@@ -40,7 +40,7 @@ const QueueTable: React.FC<QueueTableProps> = ({ applications, onMarkApplied }) 
             </tr>
           </thead>
           <tbody className="bg-white dark:bg-zinc-900 divide-y divide-gray-200 dark:divide-zinc-800">
-            {applications.map((app) => (
+            {listings.map((app) => (
               <tr key={app.id} className="hover:bg-gray-50 dark:hover:bg-zinc-800/50 transition-colors">
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{app.company}</div>
