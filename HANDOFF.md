@@ -109,7 +109,7 @@ roughly $80 over 6 months.
 ### 4. Set up the server (owner, with help)
 
 ```powershell
-ssh -i path	okey.pem ubuntu@PUBLIC_IP
+ssh -i path\to\key.pem ubuntu@PUBLIC_IP
 ```
 
 ```bash
