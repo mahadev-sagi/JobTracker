@@ -1,88 +1,55 @@
 #!/usr/bin/env bash
-# =============================================================================
-# JobTracker — Google Cloud Pub/Sub & Gmail Watch Setup
-#
-# Automates the creation of a Pub/Sub topic and push subscription, grants
-# Gmail publish permissions, and registers a Gmail watch so that new
-# incoming emails trigger a push notification to the JobTracker webhook.
-# =============================================================================
+# Run in Google Cloud Shell. Gmail watches are registered per user by the app.
 set -euo pipefail
-
-# Colour helpers
-if [[ -t 1 ]]; then
-  GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
-else
-  GREEN=''; RED=''; YELLOW=''; CYAN=''; NC=''
-fi
-
-info()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-fail()    { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
-step()    { echo -e "\n${CYAN}==> $*${NC}"; }
-
 GCP_PROJECT="${GCP_PROJECT:-}"
-PUBSUB_TOPIC="${PUBSUB_TOPIC:-jobtracker-gmail}"
-PUBSUB_SUB="${PUBSUB_SUB:-jobtracker-gmail-push}"
 WEBHOOK_URL="${WEBHOOK_URL:-}"
-GMAIL_USER_EMAIL="${GMAIL_USER_EMAIL:-}"
-
-GMAIL_SERVICE_ACCOUNT="gmail-api-push@system.gserviceaccount.com"
-
+PUBSUB_TOPIC="${PUBSUB_TOPIC:-gmail-notifications}"
+PUBSUB_SUB="${PUBSUB_SUB:-jobtracker-gmail-push}"
 while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --project)         GCP_PROJECT="$2";       shift 2;;
-    --topic)           PUBSUB_TOPIC="$2";      shift 2;;
-    --subscription)    PUBSUB_SUB="$2";        shift 2;;
-    --webhook-url)     WEBHOOK_URL="$2";       shift 2;;
-    --email)           GMAIL_USER_EMAIL="$2";  shift 2;;
-    -h|--help)
-      echo "Usage: $0 --project GCP_PROJECT --webhook-url WEBHOOK_URL --email GMAIL_EMAIL [options]"
-      exit 0
-      ;;
-    *) fail "Unknown argument: $1";;
-  esac
+    case "$1" in
+        --project|--webhook-url|--topic|--subscription)
+            [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || { echo "Missing value for $1" >&2; exit 1; }
+            case "$1" in
+                --project) GCP_PROJECT="$2";;
+                --webhook-url) WEBHOOK_URL="$2";;
+                --topic) PUBSUB_TOPIC="$2";;
+                --subscription) PUBSUB_SUB="$2";;
+            esac
+            shift 2;;
+        -h|--help) echo "Usage: bash $0 --project PROJECT_ID --webhook-url https://DOMAIN/api/webhooks/gmail [--topic NAME] [--subscription NAME]"; exit 0;;
+        *) echo "Unknown argument: $1" >&2; exit 1;;
+    esac
 done
-
-if ! command -v gcloud &>/dev/null; then
-  fail "gcloud CLI is not installed. Please install the Google Cloud SDK."
+command -v gcloud >/dev/null || { echo 'Run this in Google Cloud Shell.' >&2; exit 1; }
+[[ -n "$GCP_PROJECT" && "$WEBHOOK_URL" == https://* ]] || { echo 'Project ID and HTTPS webhook URL required.' >&2; exit 1; }
+gcloud services enable gmail.googleapis.com pubsub.googleapis.com iam.googleapis.com --project="$GCP_PROJECT"
+project_number="$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')"
+[[ "$project_number" =~ ^[0-9]+$ ]] || { echo 'Could not determine project number.' >&2; exit 1; }
+gcloud beta services identity create --service=pubsub.googleapis.com --project="$GCP_PROJECT"
+push_account="jobtracker-pubsub-push@${GCP_PROJECT}.iam.gserviceaccount.com"
+if ! gcloud iam service-accounts describe "$push_account" --project="$GCP_PROJECT" >/dev/null 2>&1; then
+    gcloud iam service-accounts create jobtracker-pubsub-push --display-name='JobTracker Gmail push' --project="$GCP_PROJECT"
 fi
-
-if [[ -z "$GCP_PROJECT" ]]; then
-  fail "GCP project is required. Pass --project <id> or set GCP_PROJECT."
+# Grant signing permission on this account only.
+gcloud iam service-accounts add-iam-policy-binding "$push_account" \
+    --member="serviceAccount:service-${project_number}@gcp-sa-pubsub.iam.gserviceaccount.com" \
+    --role=roles/iam.serviceAccountTokenCreator --project="$GCP_PROJECT" >/dev/null
+if ! gcloud pubsub topics describe "$PUBSUB_TOPIC" --project="$GCP_PROJECT" >/dev/null 2>&1; then
+    gcloud pubsub topics create "$PUBSUB_TOPIC" --project="$GCP_PROJECT"
 fi
-
-if [[ -z "$WEBHOOK_URL" ]]; then
-  fail "Webhook URL is required. Pass --webhook-url <url> or set WEBHOOK_URL."
-fi
-
-step "Setting GCP project to ${GCP_PROJECT}"
-gcloud config set project "$GCP_PROJECT"
-
-step "Creating Pub/Sub topic: ${PUBSUB_TOPIC}"
-if gcloud pubsub topics describe "$PUBSUB_TOPIC" &>/dev/null; then
-  info "Topic '${PUBSUB_TOPIC}' already exists."
-else
-  gcloud pubsub topics create "$PUBSUB_TOPIC"
-  info "Topic '${PUBSUB_TOPIC}' created."
-fi
-
-step "Granting Gmail publish permissions on topic"
 gcloud pubsub topics add-iam-policy-binding "$PUBSUB_TOPIC" \
-  --member="serviceAccount:${GMAIL_SERVICE_ACCOUNT}" \
-  --role="roles/pubsub.publisher"
-
-step "Creating push subscription: ${PUBSUB_SUB}"
-if gcloud pubsub subscriptions describe "$PUBSUB_SUB" &>/dev/null; then
-  info "Subscription '${PUBSUB_SUB}' already exists. Updating push endpoint..."
-  gcloud pubsub subscriptions update "$PUBSUB_SUB" --push-endpoint="$WEBHOOK_URL"
+    --member=serviceAccount:gmail-api-push@system.gserviceaccount.com \
+    --role=roles/pubsub.publisher --project="$GCP_PROJECT" >/dev/null
+push_flags=(--project="$GCP_PROJECT" --push-endpoint="$WEBHOOK_URL"
+    --push-auth-service-account="$push_account" --push-auth-token-audience="$WEBHOOK_URL"
+    --ack-deadline=600 --min-retry-delay=10s --max-retry-delay=600s)
+if gcloud pubsub subscriptions describe "$PUBSUB_SUB" --project="$GCP_PROJECT" >/dev/null 2>&1; then
+    existing_topic="$(gcloud pubsub subscriptions describe "$PUBSUB_SUB" --project="$GCP_PROJECT" --format='value(topic)')"
+    [[ "$existing_topic" == "projects/$GCP_PROJECT/topics/$PUBSUB_TOPIC" ]] || { echo 'Existing subscription uses another topic. Choose another name.' >&2; exit 1; }
+    gcloud pubsub subscriptions update "$PUBSUB_SUB" "${push_flags[@]}"
 else
-  gcloud pubsub subscriptions create "$PUBSUB_SUB" \
-    --topic="$PUBSUB_TOPIC" \
-    --push-endpoint="$WEBHOOK_URL" \
-    --ack-deadline=30
-  info "Subscription '${PUBSUB_SUB}' created with endpoint: ${WEBHOOK_URL}"
+    gcloud pubsub subscriptions create "$PUBSUB_SUB" --topic="$PUBSUB_TOPIC" "${push_flags[@]}"
 fi
-
-info "Pub/Sub setup completed successfully!"
-info "Topic: projects/${GCP_PROJECT}/topics/${PUBSUB_TOPIC}"
-info "Subscription: projects/${GCP_PROJECT}/subscriptions/${PUBSUB_SUB}"
+gcloud pubsub subscriptions describe "$PUBSUB_SUB" --project="$GCP_PROJECT" --format='yaml(topic,pushConfig,ackDeadlineSeconds,retryPolicy)'
+printf '\nPub/Sub setup complete. Server settings (not secrets):\n'
+printf 'GOOGLE_CLOUD_PROJECT_ID=%s\nGOOGLE_PUBSUB_TOPIC=%s\nPUBSUB_AUDIENCE=%s\nPUBSUB_SERVICE_ACCOUNT_EMAIL=%s\n' "$GCP_PROJECT" "$PUBSUB_TOPIC" "$WEBHOOK_URL" "$push_account"

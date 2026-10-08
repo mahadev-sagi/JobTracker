@@ -1,4 +1,107 @@
-# Current handoff - 2026-10-04 (`main`, pushed)
+# Deployment update - 2026-10-07
+
+This update supersedes deployment status below.
+
+- Owner confirmed AWS Free plan with $100 credits; SSH and DuckDNS work.
+  Zero-spend budget alert is not yet confirmed.
+- Server: `18.219.198.190`, Ubuntu **26.04 LTS** (not 24.04), x86_64,
+  approximately 1 GB RAM and 20 GiB disk. SSH key stays on the owner's PC.
+- Repository cloned to `/opt/jobtracker`; bootstrap completed: Docker,
+  2 GiB swap, generated secrets, automatic security updates, and cron.
+- Live: https://mahadev-jobs.duckdns.org. HTTPS certificate validates;
+  HTTP redirects to HTTPS; frontend loads; backend and database healthy.
+- Initial scrape imported 15,159 listings. Manual `update.sh` succeeded.
+  First database backup created and archive listing verified by `backup.sh`.
+- Server settings: `ADMIN_EMAILS` and `ACME_EMAIL` use
+  `madhsa1972@gmail.com`; `ALLOWED_EMAILS` includes `scholar.mahadev@gmail.com`.
+- Google project is `jobtracker-510921`. Replacement Web OAuth credentials
+  were read from the owner's downloaded JSON and installed on the server
+  without displaying secrets. Both redirect URIs match the live domain.
+  Live auth config now reports `google=true`, `dev_login=false`; backend healthy.
+  Owner confirmed Google sign-in opens the dashboard. Google test-user settings
+  and API enablement have not been independently verified.
+  Authenticated Pub/Sub push and server `PUBSUB_*` settings remain outstanding.
+- `DUCKDNS_TOKEN` and `LLM_API_KEY` remain blank. DNS currently works from
+  the owner's manual DuckDNS setup, but automatic IP updates need the token.
+  Enter secrets directly on the server, never in chat.
+- Copy encryption key and database backups somewhere off the server.
+- Google Testing mode Gmail refresh tokens expire after **7 days**;
+  scheduled watch renewal cannot prevent this. Plan for reconnecting during
+  testing. Source: https://developers.google.com/identity/protocols/oauth2
+- Gmail callback supports connecting a different Google mailbox to the
+  signed-in app user. Thus the admin can connect `scholar.mahadev@gmail.com`
+  by selecting it during Gmail consent; emails update that app user's board.
+  Signing in as scholar instead creates a separate board. The earlier chat
+  statement that sign-in must match the mailbox was too restrictive.
+- Updated local `infra/scripts/setup_pubsub.sh` to enable APIs, provision the
+  push service account and scoped signing grant, grant Gmail publication,
+  and create/update authenticated push with 600 s ack and retry settings.
+  Bash syntax checked on Ubuntu successfully. Not run against Google Cloud
+  yet; owner must run in Cloud Shell.
+- Still outstanding: run Pub/Sub setup, choose classifier privacy settings,
+  and perform real Gmail/email-update and second-user isolation tests.
+
+## Resume here: Gmail notifications
+
+1. Open https://console.cloud.google.com/?project=jobtracker-510921.
+2. Click **Activate Cloud Shell** (`>_`) near the top right and wait for
+   the terminal. Use Cloud Shell, not the EC2 SSH terminal.
+3. In the Cloud Shell terminal's **three-dot menu**, choose **Upload** and
+   upload the updated file from this PC:
+   `C:\Users\ThisPC\JobTracker\infra\scripts\setup_pubsub.sh`.
+   On another computer, first clone/pull this repository to get the file.
+4. Run:
+
+   ```bash
+   bash ~/setup_pubsub.sh --project jobtracker-510921 --webhook-url https://mahadev-jobs.duckdns.org/api/webhooks/gmail
+   ```
+
+5. Authorize Cloud Shell if prompted. Save the final output or any error.
+   The final output contains configuration values, not secrets. If Google
+   requires billing, stop and review the zero-cost requirement before
+   enabling billing.
+6. After successful setup, configure the server's `.env` with:
+
+   ```dotenv
+   GOOGLE_CLOUD_PROJECT_ID=jobtracker-510921
+   GOOGLE_PUBSUB_TOPIC=gmail-notifications
+   PUBSUB_AUDIENCE=https://mahadev-jobs.duckdns.org/api/webhooks/gmail
+   PUBSUB_SERVICE_ACCOUNT_EMAIL=jobtracker-pubsub-push@jobtracker-510921.iam.gserviceaccount.com
+   ```
+
+   Then apply settings on EC2:
+
+   ```bash
+   cd /opt/jobtracker/infra/deploy
+   sudo docker compose up -d backend
+   ```
+
+7. Choose an email classifier provider/privacy policy and enter its key
+   directly in the server `.env`; `LLM_API_KEY` is currently blank. Confirm
+   the provider's current model name and set `LLM_MODEL`/`LLM_BASE_URL` as
+   needed. Recreate the backend after changing settings.
+8. Sign in as `madhsa1972@gmail.com`, add a test application, then use
+   **Settings > Connect Gmail** and select `scholar.mahadev@gmail.com`.
+   Ensure both addresses are Google OAuth test users. Confirm notifications
+   are active, send a fake rejection matching the test application, and
+   verify its status and recent email activity. If the mailbox is connected
+   while signed in as scholar, the application must be on scholar's board.
+9. Enter `DUCKDNS_TOKEN` directly on the server and run
+   `sudo /opt/jobtracker/infra/deploy/duckdns.sh`. Save the encryption key
+   and database backup off-server, confirm the AWS budget alert, and test
+   second-user isolation before inviting friends.
+
+SSH from this PC (never paste the key contents into chat):
+
+```powershell
+ssh -i C:\Users\ThisPC\Downloads\jobtracker.pem ubuntu@18.219.198.190
+```
+
+The OAuth client secret was replaced after being shared in chat. The new
+credentials are already installed on EC2. No credentials belong in Git.
+Changes to `.env` require `docker compose up -d`, not just `restart`.
+
+# Previous handoff - 2026-10-04 (`main`, pushed)
 
 This section supersedes everything below it.
 
