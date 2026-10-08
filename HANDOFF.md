@@ -20,7 +20,8 @@ This update supersedes deployment status below.
   Live auth config now reports `google=true`, `dev_login=false`; backend healthy.
   Owner confirmed Google sign-in opens the dashboard. Google test-user settings
   and API enablement have not been independently verified.
-  Authenticated Pub/Sub push and server `PUBSUB_*` settings remain outstanding.
+  Authenticated Pub/Sub push was subsequently provisioned successfully on
+  2026-10-08 (see update below); server `PUBSUB_*` settings remain outstanding.
 - `DUCKDNS_TOKEN` and `LLM_API_KEY` remain blank. DNS currently works from
   the owner's manual DuckDNS setup, but automatic IP updates need the token.
   Enter secrets directly on the server, never in chat.
@@ -42,6 +43,27 @@ This update supersedes deployment status below.
   and perform real Gmail/email-update and second-user isolation tests.
 
 ## Resume here: Gmail notifications
+
+### Progress on 2026-10-08 (new machine)
+
+- Owner ran `setup_pubsub.sh` successfully in Google Cloud Shell for
+  `jobtracker-510921` and shared its output.
+- Created the Pub/Sub service identity, `jobtracker-pubsub-push` service
+  account, `gmail-notifications` topic, and `jobtracker-gmail-push`
+  subscription; IAM grants completed successfully.
+- Output confirms authenticated push to the live Gmail webhook, matching
+  audience and service account, 600-second acknowledgement deadline, and
+  retry backoff of 10–600 seconds.
+- Resume at **step 6 below**: install the four settings on EC2 and recreate
+  the backend. Owner explicitly confirmed the EC2 configuration step has
+  **not been done yet**. Real Gmail delivery is not yet tested. Classifier
+  configuration remains outstanding.
+- On this Mac the repository is at `/Users/mahadev/JobTracker`. The owner
+  can run the EC2 commands in AWS Console → EC2 → Instances → select the
+  JobTracker instance → Connect → EC2 Instance Connect (username `ubuntu`),
+  or through SSH with their key. Google Cloud Shell is a different machine;
+  do not edit the server `.env` there. The Windows SSH path below refers to
+  the previous PC; a Mac key path has not been confirmed.
 
 1. Open https://console.cloud.google.com/?project=jobtracker-510921.
 2. Click **Activate Cloud Shell** (`>_`) near the top right and wait for
