@@ -28,7 +28,7 @@ _SORT_COLUMNS = {"created_at", "date_posted", "company", "role"}
 async def list_listings(
     response: Response,
     search: str | None = Query(None, description="Matches company or role."),
-    sort_by: str = Query("created_at"),
+    sort_by: str = Query("date_posted"),
     order: str = Query("desc"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),

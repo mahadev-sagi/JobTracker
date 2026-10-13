@@ -51,6 +51,33 @@ SAMPLE_LISTINGS: list[dict] = [
 class TestParser:
     """Tests for ``parse_listings``."""
 
+    def test_current_feed_includes_all_categories_and_terms(self):
+        entries = [
+            {
+                "company_name": category,
+                "title": f"{category} Intern",
+                "category": category,
+                "terms": [term],
+                "active": True,
+                "is_visible": True,
+                "date_posted": 1_700_000_000,
+            }
+            for category in ("Software", "Product", "AI/ML/Data", "Quant", "Hardware")
+            for term in ("Summer 2027", "Fall 2026", "Spring 2027", "Winter 2027")
+        ]
+        results = parse_listings(entries)
+        assert len(results) == 20
+        assert {row.company for row in results} == {
+            "Software", "Product", "AI/ML/Data", "Quant", "Hardware"
+        }
+
+    def test_current_feed_excludes_closed_and_hidden_roles(self):
+        base = {"company_name": "Acme", "title": "Intern"}
+        assert parse_listings([
+            {**base, "active": False},
+            {**base, "active": True, "is_visible": False},
+        ]) == []
+
     def test_parse_sample_listings(self):
         """Active listings are correctly converted to ApplicationCreate objects."""
         results = parse_listings(SAMPLE_LISTINGS)

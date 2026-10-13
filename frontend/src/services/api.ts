@@ -153,6 +153,26 @@ export const disconnectGmail = async () => {
   await api.delete('/gmail');
 };
 
+export interface GmailScan {
+  id: string;
+  status: 'queued' | 'running' | 'completed' | 'partial' | 'failed';
+  total: number;
+  processed: number;
+  skipped: number;
+  errors: number;
+  detail: string | null;
+}
+
+export const startGmailScan = async (start_date: string, inbox_only: boolean) => {
+  const response = await api.post<GmailScan>('/gmail/scan', { start_date, inbox_only });
+  return response.data;
+};
+
+export const getGmailScan = async () => {
+  const response = await api.get<GmailScan | null>('/gmail/scan');
+  return response.data;
+};
+
 export const getEmailActivity = async () => {
   const response = await api.get<EmailActivity[]>('/gmail/activity');
   return response.data;

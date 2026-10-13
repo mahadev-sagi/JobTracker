@@ -44,10 +44,33 @@ const Settings = () => {
   const [params, setParams] = useSearchParams();
   const [activity, setActivity] = useState<EmailActivity[]>([]);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [startDate, setStartDate] = useState('');
+  const [inboxOnly, setInboxOnly] = useState(false);
+  const [scan, setScan] = useState<api.GmailScan | null>(null);
+  const [startingScan, setStartingScan] = useState(false);
+  const scanRunning = scan?.status === 'queued' || scan?.status === 'running';
+
+  useEffect(() => {
+    if (!user?.gmail) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const result = await api.getGmailScan();
+        if (active) setScan(result);
+      } catch { /* Keep the last progress during temporary connection errors. */ }
+    };
+    poll();
+    const timer = setInterval(poll, 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, [user?.gmail]);
 
   const loadActivity = useCallback(() => {
     api.getEmailActivity().then(setActivity).catch(() => setActivity([]));
   }, []);
+
+  useEffect(() => {
+    if (scan?.status && !['queued', 'running'].includes(scan.status)) loadActivity();
+  }, [scan?.status, loadActivity]);
 
   useEffect(() => {
     const result = params.get('gmail');
@@ -76,6 +99,18 @@ const Settings = () => {
       notify(api.errorMessage(err, 'Could not disconnect Gmail.'));
     } finally {
       setDisconnecting(false);
+    }
+  };
+
+  const handleScan = async () => {
+    setStartingScan(true);
+    try {
+      setScan(await api.startGmailScan(startDate, inboxOnly));
+      notify('Email scan started. Your applications will update as emails are processed.', 'success');
+    } catch (err) {
+      notify(api.errorMessage(err, 'Could not start the email scan.'));
+    } finally {
+      setStartingScan(false);
     }
   };
 
@@ -154,6 +189,42 @@ const Settings = () => {
           </div>
         )}
       </section>
+
+      {gmail && (
+        <section className={card}>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">Scan past emails</h2>
+          <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+            Scan from the selected date through now, starting at midnight UTC. Application emails
+            update your board; emails already processed are skipped. Archived mail is included
+            unless you choose inbox only. Spam and trash are excluded.
+          </p>
+          <div className="flex flex-wrap items-end gap-4">
+            <label className="text-sm text-gray-700 dark:text-gray-300">
+              Start date
+              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)}
+                max={new Date().toISOString().slice(0, 10)} disabled={scanRunning}
+                className="block mt-1 rounded-md border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2" />
+            </label>
+            <label className="text-sm text-gray-700 dark:text-gray-300 flex items-center gap-2 py-2">
+              <input type="checkbox" checked={inboxOnly} disabled={scanRunning}
+                onChange={(e) => setInboxOnly(e.target.checked)} /> Inbox only
+            </label>
+            <button onClick={handleScan}
+              disabled={!startDate || gmail.status !== 'active' || scanRunning || startingScan}
+              className="px-4 py-2 text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
+              {scanRunning || startingScan ? 'Scanning…' : 'Scan emails now'}
+            </button>
+          </div>
+          {scan && (
+            <div role="status" className="mt-4 text-sm text-gray-600 dark:text-gray-400">
+              {scan.status}: {scan.processed} processed, {scan.skipped} already checked,
+              {' '}{scan.errors} failed, {scan.total} emails found.
+              {scan.detail && <p>{scan.detail}</p>}
+              {scan.status === 'partial' && <p>Retry the scan to process failed emails.</p>}
+            </div>
+          )}
+        </section>
+      )}
 
       {gmail && (
         <section className={card}>

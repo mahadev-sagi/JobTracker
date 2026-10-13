@@ -29,6 +29,22 @@ async def test_requires_sign_in(api):
         assert (await anonymous.get("/api/auth/me")).status_code == 401
 
 
+async def test_queue_defaults_to_newest_posted_with_unknown_dates_last(api, db):
+    alice = await api()
+    # Insert out of posting order so import order cannot satisfy the assertion.
+    await db.execute("""
+        INSERT INTO listings (company, role, date_posted) VALUES
+            ('Newest', 'Intern', DATE '2026-10-12'),
+            ('Unknown', 'Intern', NULL),
+            ('Older', 'Intern', DATE '2026-09-01')
+    """)
+    first = await alice.client.get("/api/listings/", params={"limit": 2})
+    assert first.status_code == 200
+    assert [row["company"] for row in first.json()] == ["Newest", "Older"]
+    second = await alice.client.get("/api/listings/", params={"limit": 2, "offset": 2})
+    assert [row["company"] for row in second.json()] == ["Unknown"]
+
+
 async def test_state_changes_require_the_same_origin_header(api):
     alice = await api()
     response = await alice.client.post(

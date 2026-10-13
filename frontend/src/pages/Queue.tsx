@@ -42,7 +42,7 @@ const Queue = () => {
       setError(null);
       const result = await api.getListings({
         search: search || undefined,
-        sort_by: 'created_at',
+        sort_by: 'date_posted',
         order: 'desc',
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
@@ -109,7 +109,7 @@ const Queue = () => {
             Opportunity Queue
           </h1>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Open roles you haven't applied to yet
+            All internship categories and seasons, newest postings first
             {lastUpdated && ` · listings updated ${new Date(lastUpdated).toLocaleString()}`}
           </p>
         </div>

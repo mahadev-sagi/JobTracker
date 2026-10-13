@@ -5,19 +5,22 @@ Connecting a user's Gmail, and a test hook for the classifier.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, date, datetime
 
 from asyncpg import Connection
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from src.api.dependencies import CurrentUser, get_current_user, get_db
 from src.api.routes.auth import check_oauth_state, finish_redirect, start_oauth
 from src.core import google_oauth
+from src.core.config import get_settings
 from src.email_pipeline.accounts import (
     MailboxInUseError,
     connect_account,
     disconnect_account,
 )
+from src.email_pipeline.backfill import run_scan
 from src.email_pipeline.extractor import extract_application_event
 from src.email_pipeline.processing import handle_event
 from src.email_pipeline.schemas import status_for_event
@@ -27,6 +30,69 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/gmail", tags=["Gmail"])
 
 _SETTINGS_PAGE = "/settings"
+
+
+class ScanPayload(BaseModel):
+    start_date: date
+    inbox_only: bool = False
+
+
+@router.post("/scan", status_code=status.HTTP_202_ACCEPTED)
+async def start_scan(
+    payload: ScanPayload,
+    tasks: BackgroundTasks,
+    user: CurrentUser = Depends(get_current_user),
+    conn: Connection = Depends(get_db),
+):
+    if payload.start_date > datetime.now(UTC).date():
+        raise HTTPException(422, "Choose today or an earlier date.")
+    if not get_settings().llm_api_key:
+        raise HTTPException(503, "The email classifier API key is not configured on this server.")
+    async with conn.transaction():
+        # Serialise starts across server workers.
+        await conn.execute("SELECT id FROM users WHERE id = $1 FOR UPDATE", user.id)
+        account = await conn.fetchrow(
+            "SELECT status FROM gmail_accounts WHERE user_id = $1", user.id
+        )
+        if account is None or account["status"] != "active":
+            raise HTTPException(409, "Connect or reconnect Gmail before scanning.")
+        # A killed worker cannot finish its background task. Permit a retry.
+        await conn.execute(
+            """UPDATE gmail_scans SET status = 'failed', detail = 'Scan interrupted. Try again.'
+               WHERE user_id = $1 AND status IN ('queued', 'running')
+               AND updated_at < NOW() - INTERVAL '15 minutes'""", user.id,
+        )
+        busy = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM gmail_scans WHERE user_id = $1 AND status IN ('queued', 'running'))",
+            user.id,
+        )
+        if busy:
+            raise HTTPException(409, "An email scan is already running.")
+        row = await conn.fetchrow(
+            """INSERT INTO gmail_scans (user_id, start_date, inbox_only)
+               VALUES ($1, $2, $3) RETURNING *""",
+            user.id, payload.start_date, payload.inbox_only,
+        )
+    tasks.add_task(run_scan, row["id"], user.id)
+    return dict(row)
+
+
+@router.get("/scan")
+async def scan_status(
+    user: CurrentUser = Depends(get_current_user), conn: Connection = Depends(get_db),
+):
+    row = await conn.fetchrow(
+        "SELECT * FROM gmail_scans WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+        user.id,
+    )
+    if row is None:
+        return None
+    result = dict(row)
+    if result["status"] in ("queued", "running") and (
+        datetime.now(UTC) - result["updated_at"]
+    ).total_seconds() > 900:
+        result.update(status="failed", detail="Scan interrupted. Try again.")
+    return result
 
 
 @router.get("/connect")

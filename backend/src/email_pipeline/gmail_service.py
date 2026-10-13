@@ -121,7 +121,9 @@ class GmailService:
 
         return await self._run(_fetch)
 
-    async def get_messages_after(self, epoch_seconds: int) -> list[dict]:
+    async def get_messages_after(
+        self, epoch_seconds: int, *, inbox_only: bool = True
+    ) -> list[dict]:
         """Inbox message stubs received after a Unix time, oldest first.
 
         Recovery path for ``HistoryExpiredError``.
@@ -130,7 +132,8 @@ class GmailService:
         def _fetch() -> list[dict]:
             results: list[dict] = []
             request = self._users().messages().list(
-                userId="me", q=f"after:{epoch_seconds}", labelIds=["INBOX"]
+                userId="me", q=f"after:{epoch_seconds}",
+                **({"labelIds": ["INBOX"]} if inbox_only else {}),
             )
             while request is not None:
                 response = request.execute()

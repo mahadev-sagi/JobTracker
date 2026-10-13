@@ -41,7 +41,9 @@ def parse_listings(raw_json: list[dict]) -> list[ApplicationCreate]:
 
     for idx, entry in enumerate(raw_json):
         # ── Skip inactive ────────────────────────────────────────
-        if entry.get("is_active") is False:
+        if entry.get("active") is False or entry.get("is_active") is False:
+            continue
+        if entry.get("is_visible") is False:
             continue
 
         try:
